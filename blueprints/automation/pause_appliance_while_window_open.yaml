@@ -15,7 +15,7 @@ blueprint:
       name: Appliance
       selector: { entity: { domain: [humidifier, climate, fan, switch] } }
     paused_flag:
-      name: "Paused by window" helper
+      name: Paused-by-window helper
       description: An input_boolean that remembers the automation paused the appliance.
       selector: { entity: { domain: input_boolean } }
     open_minutes:
