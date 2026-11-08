@@ -10,33 +10,25 @@ Small, well-behaved automations from a real home, each one built to stay polite 
 
 > The import buttons work once this repository is public.
 
-## Comfort
+## Shopping
 
 | Blueprint | What it does | Import |
 |---|---|---|
-| **Keep rooms cool on hot afternoons** | Hot and nobody home → sunny-side blinds part-way down (plants keep their light); open again when the sun moves on or someone comes home. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcomfort%2Fkeep_rooms_cool.yaml) |
-| **"Close the windows"** | Warmer outside than in while it's already warm, or colder outside while it's already cool → reminder. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcomfort%2Fclose_windows_reminder.yaml) |
+| **"Buy again" ranked by what you really buy** | Counts every item ever on your list and keeps your top items (✓ = already on the list) in a Text helper for dashboard buttons. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fshopping%2Fbuy_again_ranking.yaml) |
+| **Add an item without duplicates** *(script)* | Adds by name, or by buy-again position (`slot: 1`). A ticked-off item is reopened instead of added twice. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fscript%2Fshopping%2Fadd_buy_again_item.yaml) |
+| **Shopping list by voice** | "We need milk", "put bread on the list", "what's on the shopping list?" (reads it back). | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fshopping%2Fshopping_by_voice.yaml) |
 
-## Energy
+Buy-again buttons for a dashboard (one per position; repeat for 2, 3…):
 
-| Blueprint | What it does | Import |
-|---|---|---|
-| **Always-on power (night standby)** | Each morning stores the house's lowest night-time draw — what never switches off. Leaves out minutes when the car was charging. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fenergy%2Fnight_standby_baseline.yaml) |
-| **Monthly home energy summary** | On the 1st: last month's electricity and gas, cost and change vs the month before, from long-term statistics. Short push, full report in notifications. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fenergy%2Fmonthly_energy_summary.yaml) |
-
-## Lights and buttons
-
-| Blueprint | What it does | Import |
-|---|---|---|
-| **Shower detection turns the bathroom light on** | Mirror light on and humidity rising fast → main light on. Uses a Derivative helper. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flights%2Fshower_light.yaml) |
-| **One button, several jobs** | Single / double / triple / long press each do something different. Works with any event-entity button; press names are configurable. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fbuttons%2Fone_button_several_jobs.yaml) |
-
-## Housekeeping
-
-| Blueprint | What it does | Import |
-|---|---|---|
-| **Reload a cloud integration that has gone mostly offline** | Every 30 min: an integration with most entities unavailable for 30+ min is reloaded, and you're told if it came back. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsystem%2Freload_unavailable_integration.yaml) |
-| **Restart a smart bulb that dropped offline** | Power-cycles the relay behind a Wi-Fi bulb that went unavailable, then switches the bulb off again. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsystem%2Frestart_offline_bulb.yaml) |
+```yaml
+type: custom:mushroom-template-card   # or a plain button card
+primary: "{{ (states('input_text.buy_again').split('|')[0] | default('')) | replace('✓', '') }}"
+icon: "{{ 'mdi:check' if states('input_text.buy_again').split('|')[0].startswith('✓') else 'mdi:cart-plus' }}"
+tap_action:
+  action: perform-action
+  perform_action: script.shopping_add_item   # the script you made from the blueprint
+  data: { slot: 1 }
+```
 
 ## Before you import
 
@@ -46,9 +38,6 @@ Some blueprints need a helper. Create it first under *Settings → Devices & ser
 |---|---|
 | Motion light auto-off | A **Timer** (e.g. "Entrance auto-off pause"). Add dashboard buttons that start it for 30 min / 1 h / 2 h. |
 | Pause an appliance | A **Toggle** (input_boolean, e.g. "Dehumidifier paused by window") |
-| Keep rooms cool | A **Toggle** "Blinds lowered for heat" |
-| Night standby | A **Number** helper "Night standby power" (0–5000 W, box mode) |
-| Shower detection | A **Derivative** sensor on the bathroom humidity (time unit: minutes) |
 
 ### Pause buttons for the motion light (dashboard YAML)
 
