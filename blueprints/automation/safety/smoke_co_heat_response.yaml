@@ -1,0 +1,139 @@
+blueprint:
+  name: Smoke / CO / heat alarm response
+  description: >-
+    When a smoke, carbon-monoxide or heat alarm goes off, the house helps you
+    get out: escape-route lights on at full brightness, bedroom lights red
+    (they wake people without needing a phone), blinds opened at least part of
+    the way, a spoken warning on your speakers and a critical phone alert that
+    rings even on silent.
+
+
+    Ignores the alarm's self-tests if you give it the test sensors, and changes
+    from unavailable (a reconnecting alarm doesn't count).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/safety/smoke_co_heat_response.yaml
+  input:
+    alarms:
+      name: Alarm sensors
+      description: Smoke, CO and/or heat binary sensors.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+              device_class: [smoke, carbon_monoxide, gas, heat]
+            - domain: binary_sensor
+    ignore_while:
+      name: Ignore while any of these is on (optional)
+      description: Self-test, "removed from base" or similar sensors.
+      default: []
+      selector: { entity: { domain: binary_sensor, multiple: true } }
+    escape_lights:
+      name: Escape-route lights
+      default: {}
+      selector: { target: { entity: { domain: light } } }
+    red_lights:
+      name: Lights to turn red (bedrooms)
+      default: {}
+      selector: { target: { entity: { domain: light } } }
+    covers:
+      name: Blinds to open
+      default: []
+      selector: { entity: { domain: cover, multiple: true } }
+    cover_position:
+      name: Open the blinds to at least
+      default: 25
+      selector: { number: { min: 5, max: 100, unit_of_measurement: "%" } }
+    tts:
+      name: Text-to-speech engine (optional)
+      default: []
+      selector: { entity: { domain: tts } }
+    speakers:
+      name: Speakers (optional)
+      default: []
+      selector: { entity: { domain: media_player, multiple: true } }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+max_exceeded: silent
+
+variables:
+  ignore_list: !input ignore_while
+  escape_target: !input escape_lights
+  red_target: !input red_lights
+  covers: !input covers
+  cover_position: !input cover_position
+  tts_entity: !input tts
+  speakers: !input speakers
+  notify_action: !input notify_action
+  kind: >-
+    {% set dc = trigger.to_state.attributes.device_class | default('') %}
+    {{ 'co' if dc in ['carbon_monoxide', 'gas'] else 'heat' if dc == 'heat' else 'smoke' }}
+  where: "{{ area_name(trigger.entity_id) or trigger.to_state.name }}"
+  spoken: >-
+    {{ {'smoke': 'Warning! Smoke detected in the ' ~ where ~ '. Please leave the house now.',
+        'co': 'Warning! Carbon monoxide detected. Open the windows and leave the house now.',
+        'heat': 'Warning! High heat detected in the ' ~ where ~ '. Please check the house now.'}[kind] }}
+
+triggers:
+  - trigger: state
+    entity_id: !input alarms
+    from: "off"
+    to: "on"
+    for: "00:00:05"
+
+conditions:
+  - condition: template
+    value_template: "{{ ignore_list | select('is_state', 'on') | list | count == 0 }}"
+
+actions:
+  - action: "{{ notify_action }}"
+    continue_on_error: true
+    data:
+      title: "🔥 {{ {'smoke': 'Smoke', 'co': 'Carbon monoxide', 'heat': 'Heat'}[kind] }} alarm"
+      message: "{{ trigger.to_state.name }} went off at {{ now().strftime('%H:%M') }}."
+      data:
+        tag: safety-alarm
+        push: { sound: { name: default, critical: 1, volume: 1.0 } }
+        ttl: 0
+        priority: high
+  - if:
+      - condition: template
+        value_template: "{{ escape_target not in [none, {}, ''] }}"
+    then:
+      - action: light.turn_on
+        target: !input escape_lights
+        data: { brightness_pct: 100 }
+        continue_on_error: true
+  - if:
+      - condition: template
+        value_template: "{{ red_target not in [none, {}, ''] }}"
+    then:
+      - action: light.turn_on
+        target: !input red_lights
+        data: { rgb_color: [255, 0, 0], brightness_pct: 100 }
+        continue_on_error: true
+  - repeat:
+      for_each: "{{ covers }}"
+      sequence:
+        - if:
+            - condition: template
+              value_template: "{{ state_attr(repeat.item, 'current_position') | int(0) < cover_position | int }}"
+          then:
+            - action: cover.set_cover_position
+              target: { entity_id: "{{ repeat.item }}" }
+              data: { position: "{{ cover_position | int }}" }
+              continue_on_error: true
+  - if:
+      - condition: template
+        value_template: "{{ tts_entity | length > 0 and speakers | length > 0 }}"
+    then:
+      - action: tts.speak
+        target: { entity_id: "{{ tts_entity }}" }
+        data:
+          media_player_entity_id: "{{ speakers }}"
+          message: "{{ spoken }}"
+        continue_on_error: true

@@ -1,0 +1,86 @@
+blueprint:
+  name: Light on for a while when someone arrives after dark
+  description: >-
+    When someone arrives home after dark, the stairs / porch / entrance light
+    comes on for a set time. Another arrival restarts the time. If the light
+    was already on (switched on by hand), it is left alone and not turned off.
+
+
+    **Create first:** a Timer helper, e.g. "Arrival light".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/presence/arrival_light.yaml
+  input:
+    people:
+      name: People
+      selector: { entity: { domain: person, multiple: true } }
+    light:
+      name: Light
+      selector: { entity: { domain: [light, switch, input_boolean] } }
+    timer:
+      name: Timer helper
+      selector: { entity: { domain: timer } }
+    duration:
+      name: Keep it on for
+      default: { minutes: 15 }
+      selector: { duration: {} }
+
+mode: queued
+max: 5
+
+variables:
+  light: !input light
+  timer: !input timer
+  duration_input: !input duration
+  duration: >-
+    {{ '%02d:%02d:%02d' | format((duration_input.days | default(0)) * 24 + (duration_input.hours | default(0)),
+       duration_input.minutes | default(0), duration_input.seconds | default(0)) }}
+
+triggers:
+  - trigger: state
+    entity_id: !input people
+    to: home
+    id: arrived
+  - trigger: event
+    event_type: timer.finished
+    event_data:
+      entity_id: !input timer
+    id: done
+
+actions:
+  - choose:
+      - alias: Arrival in the dark
+        conditions:
+          - condition: trigger
+            id: arrived
+          - condition: state
+            entity_id: sun.sun
+            state: below_horizon
+        sequence:
+          - choose:
+              - alias: Light off → on, start the timer
+                conditions:
+                  - condition: template
+                    value_template: "{{ is_state(light, 'off') }}"
+                sequence:
+                  - action: homeassistant.turn_on
+                    target: { entity_id: "{{ light }}" }
+                  - action: timer.start
+                    target: { entity_id: "{{ timer }}" }
+                    data: { duration: "{{ duration }}" }
+              - alias: Already on from an earlier arrival → restart the time
+                conditions:
+                  - condition: template
+                    value_template: "{{ is_state(timer, 'active') }}"
+                sequence:
+                  - action: timer.start
+                    target: { entity_id: "{{ timer }}" }
+                    data: { duration: "{{ duration }}" }
+      - alias: Time is up → off
+        conditions:
+          - condition: trigger
+            id: done
+          - condition: template
+            value_template: "{{ is_state(light, 'on') }}"
+        sequence:
+          - action: homeassistant.turn_off
+            target: { entity_id: "{{ light }}" }

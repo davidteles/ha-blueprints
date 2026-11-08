@@ -1,0 +1,55 @@
+blueprint:
+  name: Safety sensor offline
+  description: >-
+    A leak, smoke, door or window sensor that is offline can't warn you. If one
+    stays unavailable for a while you get a message, and another when it's back
+    (only if it had really been gone for that long).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/safety/safety_sensor_offline.yaml
+  input:
+    sensors:
+      name: Safety sensors
+      selector: { entity: { domain: binary_sensor, multiple: true } }
+    wait:
+      name: Offline for
+      default: { hours: 1 }
+      selector: { duration: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+
+variables:
+  notify_action: !input notify_action
+  wait_input: !input wait
+  wait_s: >-
+    {{ (wait_input.days | default(0)) * 86400 + (wait_input.hours | default(0)) * 3600
+       + (wait_input.minutes | default(0)) * 60 + (wait_input.seconds | default(0)) }}
+
+triggers:
+  - trigger: state
+    entity_id: !input sensors
+    to: unavailable
+    for: !input wait
+    id: offline
+  - trigger: state
+    entity_id: !input sensors
+    from: unavailable
+    not_to: unknown
+    id: back
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.id == 'offline'
+         or (now() - trigger.from_state.last_changed).total_seconds() >= wait_s | int }}
+
+actions:
+  - action: "{{ notify_action }}"
+    data:
+      title: "🛡️ Safety sensor"
+      message: >-
+        {% if trigger.id == 'offline' %}{{ trigger.to_state.name }} is offline. Its alerts won't reach you until it reconnects.{% else %}{{ trigger.to_state.name }} is back online.{% endif %}
+      data: { tag: "offline-{{ trigger.entity_id }}" }

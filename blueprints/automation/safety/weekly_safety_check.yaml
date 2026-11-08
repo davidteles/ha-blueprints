@@ -1,0 +1,101 @@
+blueprint:
+  name: Weekly safety check (short push + full report)
+  description: >-
+    Once a week, checks your safety sensors — leak, smoke, door/window, motion:
+    are they online, and how are their batteries? The full report (one line per
+    sensor, the lowest battery) goes into Home Assistant's notifications, which
+    are easy to read at length. Your phone gets only a short summary, and
+    tapping it opens a page of your choice — for example a dashboard view with
+    the same report (see the README for a ready-made card).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/safety/weekly_safety_check.yaml
+  input:
+    sensors:
+      name: Safety sensors
+      selector: { entity: { domain: binary_sensor, multiple: true } }
+    weekday:
+      name: Day
+      default: [sun]
+      selector:
+        select:
+          multiple: true
+          options:
+            - { label: Monday, value: mon }
+            - { label: Tuesday, value: tue }
+            - { label: Wednesday, value: wed }
+            - { label: Thursday, value: thu }
+            - { label: Friday, value: fri }
+            - { label: Saturday, value: sat }
+            - { label: Sunday, value: sun }
+    at:
+      name: Time
+      default: "10:00:00"
+      selector: { time: {} }
+    battery_low:
+      name: Battery warning below
+      default: 25
+      selector: { number: { min: 5, max: 60, unit_of_measurement: "%" } }
+    tap_url:
+      name: Open when tapped (optional)
+      description: A dashboard path, e.g. /lovelace/safety. Leave empty to open the app.
+      default: ""
+      selector: { text: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+variables:
+  sensors: !input sensors
+  low: !input battery_low
+  tap_url: !input tap_url
+  notify_action: !input notify_action
+  result: >-
+    {%- set ns = namespace(ok=0, issues=[], lines=[], low=101, low_name='') -%}
+    {%- for e in sensors -%}
+      {%- set d = device_id(e) -%}
+      {%- set name = (device_name(e) if d else none) or state_attr(e, 'friendly_name') or e -%}
+      {%- if states(e) in ['unavailable', 'unknown'] -%}
+        {%- set ns.issues = ns.issues + [name ~ ' is offline'] -%}
+        {%- set ns.lines = ns.lines + ['⚠️ **' ~ name ~ '**: offline'] -%}
+      {%- else -%}
+        {%- set bats = (device_entities(d) | select('match', 'sensor\\.') | select('is_state_attr', 'device_class', 'battery') | list) if d else [] -%}
+        {%- set b = (states(bats[0]) | float(-1)) if bats else -1 -%}
+        {%- set btxt = (' · battery ' ~ (b | int) ~ '%') if b >= 0 else '' -%}
+        {%- if 0 <= b < low | float -%}
+          {%- set ns.issues = ns.issues + [name ~ ' battery ' ~ (b | int) ~ '%'] -%}
+          {%- set ns.lines = ns.lines + ['🪫 **' ~ name ~ '**: online' ~ btxt] -%}
+        {%- else -%}
+          {%- set ns.ok = ns.ok + 1 -%}
+          {%- set ns.lines = ns.lines + ['✅ ' ~ name ~ ': online' ~ btxt] -%}
+        {%- endif -%}
+        {%- if 0 <= b < ns.low -%}{%- set ns.low = b -%}{%- set ns.low_name = name -%}{%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ {'ok': ns.ok, 'issues': ns.issues, 'lines': ns.lines, 'low': ns.low | int, 'low_name': ns.low_name} }}
+
+triggers:
+  - trigger: time
+    at: !input at
+    weekday: !input weekday
+
+actions:
+  - action: persistent_notification.create
+    data:
+      notification_id: weekly_safety_check
+      title: "🛡️ Weekly safety check · {{ now().strftime('%a %d %b') }}"
+      message: >-
+        {{ (('**⚠️ ' ~ (result.issues | count) ~ (' thing needs' if result.issues | count == 1 else ' things need') ~ ' attention**\n'
+             ~ (result.issues | map('regex_replace', '^', '- ') | join('\n')))
+            if result.issues else ('**✅ All ' ~ (sensors | count) ~ ' safety sensors are online**'))
+           ~ '\n\n**Sensors (' ~ result.ok ~ ' of ' ~ (sensors | count) ~ ' OK)**\n'
+           ~ (result.lines | map('regex_replace', '^', '- ') | join('\n'))
+           ~ (('\n\n**Lowest battery:** ' ~ result.low_name ~ ' ' ~ result.low ~ '%') if result.low_name else '') }}
+  - action: "{{ notify_action }}"
+    data:
+      title: "🛡️ Weekly safety check"
+      message: >-
+        {% if result.issues %}⚠️ {{ result.issues | count }} {{ 'thing needs' if result.issues | count == 1 else 'things need' }} attention: {{ result.issues | join(', ') }}.{% else %}✅ All {{ sensors | count }} safety sensors are online.{% endif %} Tap for the full report.
+      data: "{{ {'tag': 'weekly-safety-check', 'url': tap_url} if tap_url else {'tag': 'weekly-safety-check'} }}"
