@@ -1,0 +1,71 @@
+blueprint:
+  name: Shopping — add a buy-again item (or any item) without duplicates
+  description: >-
+    Adds an item to your shopping list. If the same item is already there but
+    ticked off, it is reopened instead of added twice — so the list keeps one
+    line per item and its history stays useful for "buy again".
+
+
+    Call it with `slot: 3` to add the third item of the "Buy again" ranking
+    (for dashboard buttons), or with `item: Milk` to add anything.
+  domain: script
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/script/shopping/add_buy_again_item.yaml
+  input:
+    todo_list:
+      name: Shopping list
+      selector: { entity: { domain: todo } }
+    ranking:
+      name: '"Buy again" Text helper'
+      selector: { entity: { domain: input_text } }
+
+mode: parallel
+
+fields:
+  slot:
+    name: Buy-again position
+    description: 1 = the most bought item.
+    selector: { number: { min: 1, max: 20 } }
+  item:
+    name: Item
+    description: Used when no slot is given.
+    selector: { text: {} }
+
+variables:
+  todo_list: !input todo_list
+  ranking: !input ranking
+  name: >-
+    {% if slot is defined and slot %}
+      {% set parts = states(ranking).split('|') %}{% set i = slot | int - 1 %}
+      {{ (parts[i] if parts | count > i else '') | replace('✓', '') | trim }}
+    {% else %}{{ (item | default('')) | trim }}{% endif %}
+
+sequence:
+  - condition: template
+    value_template: "{{ name | length > 0 }}"
+  - action: todo.get_items
+    target: { entity_id: "{{ todo_list }}" }
+    data: { status: [needs_action, completed] }
+    response_variable: r
+  - variables:
+      existing: >-
+        {%- set ns = namespace(m=[]) -%}
+        {%- for it in r[todo_list]['items'] if (it.summary | trim | lower) == (name | trim | lower) -%}
+          {%- set ns.m = ns.m + [it] -%}
+        {%- endfor -%}
+        {{ ns.m }}
+  - choose:
+      - alias: Already on the list → nothing to do
+        conditions: "{{ existing | selectattr('status', 'eq', 'needs_action') | list | count > 0 }}"
+        sequence: []
+      - alias: Ticked off before → reopen it
+        conditions: "{{ existing | count > 0 }}"
+        sequence:
+          - action: todo.update_item
+            target: { entity_id: "{{ todo_list }}" }
+            data:
+              item: "{{ existing[0].uid }}"
+              status: needs_action
+    default:
+      - action: todo.add_item
+        target: { entity_id: "{{ todo_list }}" }
+        data: { item: "{{ name[:1] | upper ~ name[1:] }}" }
