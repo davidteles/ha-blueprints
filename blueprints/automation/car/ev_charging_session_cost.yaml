@@ -1,0 +1,113 @@
+blueprint:
+  name: Charging session cost at your live electricity price
+  description: >-
+    Chargers usually price a session with one fixed price you typed into their
+    app. This adds up each session's cost at **Home Assistant's own live
+    electricity price**: every time the session's energy grows, the new kWh
+    are charged at the price of that moment. A new session (its energy drops
+    back) starts from zero again.
+
+
+    It also remembers the last finished session as "kWh|km|timestamp" in a
+    text helper, for a dashboard card like "Last charge: 18.4 kWh, +110 km,
+    Tuesday".
+
+
+    **Create first:** a Number helper "Charging session cost" (0–1000, step
+    0.001, box mode) and, optionally, a Text helper "Last charging session".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_charging_session_cost.yaml
+  input:
+    session_energy:
+      name: Session energy (kWh)
+      description: The charger's "energy added in this session" sensor.
+      selector: { entity: { domain: sensor } }
+    price:
+      name: Electricity price now (per kWh)
+      selector: { entity: { domain: sensor } }
+    cost:
+      name: Session cost (Number helper)
+      selector: { entity: { domain: input_number } }
+    charging:
+      name: Charging (optional, for the last-session memory)
+      description: An entity whose state shows the car is charging.
+      default: []
+      selector: { entity: {} }
+    charging_state:
+      name: '"Charging" state'
+      default: "on"
+      selector: { text: {} }
+    session_range:
+      name: Range added in this session (optional)
+      default: []
+      selector: { entity: { domain: sensor } }
+    last_session:
+      name: Last session (Text helper, optional)
+      default: []
+      selector: { entity: { domain: input_text } }
+
+mode: queued
+max: 20
+
+variables:
+  price_entity: !input price
+  cost_entity: !input cost
+  energy_entity: !input session_energy
+  range_entity: !input session_range
+  last_entity: !input last_session
+  charging_state: !input charging_state
+
+triggers:
+  - trigger: state
+    entity_id: !input session_energy
+    to: null
+    id: energy
+  - trigger: state
+    entity_id: !input charging
+    not_to: [unavailable, unknown]
+    id: charging_changed
+
+actions:
+  - choose:
+      - alias: Energy changed → add its cost
+        conditions:
+          - condition: trigger
+            id: energy
+          - condition: template
+            value_template: >-
+              {{ trigger.from_state is not none and is_number(trigger.from_state.state)
+                 and is_number(trigger.to_state.state) and is_number(states(price_entity)) }}
+        sequence:
+          - variables:
+              old: "{{ trigger.from_state.state | float }}"
+              new: "{{ trigger.to_state.state | float }}"
+              price: "{{ states(price_entity) | float }}"
+              acc: "{{ states(cost_entity) | float(0) }}"
+          - if:
+              - condition: template
+                value_template: "{{ new < old - 0.01 }}"
+            then:
+              - action: input_number.set_value
+                target: { entity_id: "{{ cost_entity }}" }
+                data: { value: "{{ (new * price) | round(3) }}" }
+            else:
+              - condition: template
+                value_template: "{{ new > old }}"
+              - action: input_number.set_value
+                target: { entity_id: "{{ cost_entity }}" }
+                data: { value: "{{ (acc + (new - old) * price) | round(3) }}" }
+      - alias: Charging stopped → remember the session
+        conditions:
+          - condition: trigger
+            id: charging_changed
+          - condition: template
+            value_template: >-
+              {{ last_entity | length > 0 and trigger.from_state is not none
+                 and trigger.from_state.state == charging_state and trigger.to_state.state != charging_state }}
+        sequence:
+          - delay: { seconds: 30 }
+          - action: input_text.set_value
+            target: { entity_id: "{{ last_entity }}" }
+            data:
+              value: >-
+                {{ states(energy_entity) }}|{{ states(range_entity) if range_entity | length > 0 else '' }}|{{ now().timestamp() | int }}

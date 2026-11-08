@@ -1,0 +1,93 @@
+blueprint:
+  name: Charger locked with the car plugged in
+  description: >-
+    The car is plugged in but the charger is locked, so it will never charge.
+    You get a notification with an **Unlock** button (your phone asks for Face
+    ID / fingerprint first). It confirms when the charger is unlocked, and the
+    alert disappears however you unlock it.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_charger_locked_car_plugged.yaml
+  input:
+    charger_lock:
+      name: Charger lock
+      selector: { entity: { domain: lock } }
+    plugged:
+      name: Car connected
+      description: Binary sensor that is on while a car is plugged into the charger.
+      selector: { entity: { domain: binary_sensor } }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: parallel
+max: 5
+
+variables:
+  lock_entity: !input charger_lock
+  plugged_entity: !input plugged
+  notify_action: !input notify_action
+
+triggers:
+  - trigger: state
+    entity_id: !input plugged
+    to: "on"
+    not_from: [unavailable, unknown]
+    id: check
+  - trigger: state
+    entity_id: !input charger_lock
+    to: locked
+    not_from: [unavailable, unknown]
+    id: check
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: CHARGER_UNLOCK }
+    id: unlock_button
+  - trigger: state
+    entity_id: !input charger_lock
+    from: locked
+    to: unlocked
+    id: unlocked
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: check
+          - condition: template
+            value_template: "{{ is_state(lock_entity, 'locked') and is_state(plugged_entity, 'on') }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "🔒 Charger is locked"
+              message: >-
+                The car is plugged in, but the charger is locked, so it won't charge.
+                👆 Press and hold for: Unlock
+              data:
+                tag: charger-locked
+                group: car
+                push: { interruption-level: time-sensitive }
+                actions: [{ action: CHARGER_UNLOCK, title: Unlock, authenticationRequired: true }]
+      - conditions: [{ condition: trigger, id: unlock_button }]
+        sequence:
+          - action: lock.unlock
+            target: { entity_id: "{{ lock_entity }}" }
+            continue_on_error: true
+          - wait_template: "{{ is_state(lock_entity, 'unlocked') }}"
+            timeout: "00:03:00"
+          - if:
+              - condition: template
+                value_template: "{{ not is_state(lock_entity, 'unlocked') }}"
+            then:
+              - action: "{{ notify_action }}"
+                data:
+                  title: "⚠️ Charger still locked"
+                  message: Unlocking didn't work within 3 minutes. Please unlock it in the charger's app.
+                  data: { tag: charger-locked, group: car }
+      - conditions: [{ condition: trigger, id: unlocked }]
+        sequence:
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: charger-locked }

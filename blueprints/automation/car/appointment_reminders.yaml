@@ -1,0 +1,101 @@
+blueprint:
+  name: Appointment reminders (car inspection, service…)
+  description: >-
+    Type the booked date and time into a Date and time helper — from a
+    dashboard card or the helper itself — and get a reminder the day before and
+    a few hours before. Made for the car inspection, but works for any
+    appointment you book a few times a year.
+
+
+    An optional "booked" toggle is on from the moment a future date is entered
+    until a few hours after the appointment, so a dashboard can show
+    "Book the inspection" only while nothing is booked.
+
+
+    **Create first:** a Date and time helper (date and time), e.g.
+    "Car inspection booked". Optionally a Toggle "Car inspection is booked".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/appointment_reminders.yaml
+  input:
+    booking:
+      name: Booked date and time
+      selector: { entity: { domain: input_datetime } }
+    booked_flag:
+      name: '"Is booked" toggle (optional)'
+      default: []
+      selector: { entity: { domain: input_boolean } }
+    what:
+      name: What is it?
+      default: Car inspection
+      selector: { text: {} }
+    first_offset:
+      name: First reminder
+      description: Relative to the appointment; negative is before (default one day before).
+      default: "-24:00:00"
+      selector: { duration: { allow_negative: true } }
+    second_offset:
+      name: Second reminder
+      description: Relative to the appointment; negative is before (default two hours before).
+      default: "-02:00:00"
+      selector: { duration: { allow_negative: true } }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+
+variables:
+  booking_entity: !input booking
+  flag_entity: !input booked_flag
+  what: !input what
+  notify_action: !input notify_action
+  is_future: "{{ as_timestamp(states(booking_entity), 0) > as_timestamp(now()) }}"
+
+triggers:
+  - trigger: time
+    at: { entity_id: !input booking, offset: !input first_offset }
+    id: first
+  - trigger: time
+    at: { entity_id: !input booking, offset: !input second_offset }
+    id: second
+  - trigger: time
+    at: { entity_id: !input booking, offset: "03:00:00" }
+    id: over
+  - trigger: state
+    entity_id: !input booking
+    id: changed
+
+actions:
+  - choose:
+      - alias: Booking entered or changed → update the toggle
+        conditions:
+          - condition: trigger
+            id: changed
+          - condition: template
+            value_template: "{{ flag_entity | length > 0 }}"
+        sequence:
+          - action: "input_boolean.turn_{{ 'on' if is_future else 'off' }}"
+            target: { entity_id: "{{ flag_entity }}" }
+      - alias: Appointment over
+        conditions:
+          - condition: trigger
+            id: over
+          - condition: template
+            value_template: "{{ flag_entity | length > 0 }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ flag_entity }}" }
+      - alias: Reminder
+        conditions:
+          - condition: trigger
+            id: [first, second]
+          - condition: template
+            value_template: "{{ is_future }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: >-
+                🔧 {{ what }} {{ 'today' if as_timestamp(states(booking_entity)) | timestamp_custom('%Y-%m-%d') == now().strftime('%Y-%m-%d') else 'tomorrow' if trigger.id == 'first' else 'soon' }}
+              message: "Booked for {{ as_timestamp(states(booking_entity)) | timestamp_custom('%A %d %B at %H:%M') }}."
+              data: { tag: "{{ what | lower | replace(' ', '-') }}", group: car }

@@ -1,0 +1,72 @@
+blueprint:
+  name: Car left unlocked while you're away from it
+  description: >-
+    The car has been unlocked for a few minutes while you are more than a set
+    distance from it — you probably walked off without locking it.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/car_unlocked_while_away.yaml
+  input:
+    car_lock:
+      name: Car lock
+      selector: { entity: { domain: lock } }
+    car_tracker:
+      name: Car location
+      selector: { entity: { domain: device_tracker } }
+    person:
+      name: Driver
+      selector: { entity: { domain: person } }
+    distance:
+      name: Away from the car by more than
+      default: 100
+      selector: { number: { min: 20, max: 2000, step: 10, unit_of_measurement: m } }
+    wait:
+      name: Unlocked for at least
+      default: { minutes: 5 }
+      selector: { duration: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+trigger_variables:
+  car_tracker: !input car_tracker
+  person: !input person
+  max_m: !input distance
+
+variables:
+  lock_entity: !input car_lock
+  notify_action: !input notify_action
+
+triggers:
+  - trigger: state
+    entity_id: !input car_lock
+    to: unlocked
+    for: !input wait
+  - trigger: template
+    value_template: >-
+      {% if has_value(car_tracker) and has_value(person) %}
+        {% set d = distance(person, car_tracker) %}
+        {{ d is not none and d * 1000 > max_m | float(100) }}
+      {% else %}false{% endif %}
+    for: !input wait
+
+conditions:
+  - condition: state
+    entity_id: !input car_lock
+    state: unlocked
+    for: !input wait
+  - condition: template
+    value_template: >-
+      {% if has_value(car_tracker) and has_value(person) %}
+        {% set d = distance(person, car_tracker) %}
+        {{ d is not none and d * 1000 > max_m | float(100) }}
+      {% else %}false{% endif %}
+
+actions:
+  - action: "{{ notify_action }}"
+    data:
+      title: "🚗 Car left unlocked"
+      message: "The car has been unlocked for a while and you're away from it."
+      data: { tag: car-unlocked, group: car, push: { interruption-level: time-sensitive } }

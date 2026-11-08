@@ -1,0 +1,69 @@
+blueprint:
+  name: Appliance ready but not started
+  description: >-
+    The washer (or dishwasher, dryer…) has been left ready to start remotely
+    — "Smart Control" / "Remote start" on — but nothing has started or been
+    scheduled for a while. Usually it means someone forgot to press start in
+    the app.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/appliance_ready_not_started.yaml
+  input:
+    ready:
+      name: Remote start enabled
+      description: Binary sensor that is on while the appliance waits for a remote start.
+      selector: { entity: { domain: binary_sensor } }
+    machine_state:
+      name: Machine state sensor
+      selector: { entity: { domain: sensor } }
+    idle_states:
+      name: Idle states
+      description: States of the machine sensor meaning nothing is running or scheduled, separated by commas.
+      default: stop, none
+      selector: { text: {} }
+    wait:
+      name: Alert after
+      default: { minutes: 15 }
+      selector: { duration: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+    name:
+      name: Appliance name
+      default: Washer
+      selector: { text: {} }
+
+mode: single
+
+variables:
+  machine_entity: !input machine_state
+  idle_input: !input idle_states
+  idle_list: "{{ idle_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  notify_action: !input notify_action
+  name: !input name
+
+triggers:
+  - trigger: state
+    entity_id: !input ready
+    to: "on"
+    for: !input wait
+  - trigger: state
+    entity_id: !input machine_state
+    for: !input wait
+
+conditions:
+  - condition: state
+    entity_id: !input ready
+    state: "on"
+    for: !input wait
+  - condition: template
+    value_template: "{{ states(machine_entity) in idle_list }}"
+
+actions:
+  - action: "{{ notify_action }}"
+    data:
+      title: "{{ name }} waiting"
+      message: "Remote start has been on for a while, but nothing has started or been scheduled."
+      data:
+        tag: "{{ name | lower | replace(' ', '-') }}-not-started"
+        push: { interruption-level: time-sensitive }

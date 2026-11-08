@@ -1,0 +1,95 @@
+blueprint:
+  name: Electric car not plugged in at night
+  description: >-
+    At a set time, if you and the car are home, the battery is below your
+    threshold and the charger isn't connected, you get a reminder to plug in.
+    When you plug in, the same notification turns into "plugged in" and then
+    disappears.
+
+
+    The threshold is a Number helper, so you can change it from a dashboard
+    (a tile with the number buttons works well).
+
+
+    **Create first:** a Number helper, e.g. "Car plug-in reminder below",
+    5–100 %, step 5, set to 40.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_not_plugged_in.yaml
+  input:
+    at:
+      name: Check at
+      default: "22:00:00"
+      selector: { time: {} }
+    person:
+      name: Driver
+      description: Only reminds while this person is home.
+      selector: { entity: { domain: person } }
+    car_tracker:
+      name: Car location (optional)
+      description: Only reminds while the car is home. Leave empty if the car has no tracker.
+      default: []
+      selector: { entity: { domain: device_tracker } }
+    battery:
+      name: Car battery level
+      selector: { entity: { domain: sensor, device_class: battery } }
+    threshold:
+      name: Remind below (Number helper)
+      selector: { entity: { domain: input_number } }
+    plugged:
+      name: Charger connected
+      selector: { entity: { domain: binary_sensor } }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+variables:
+  battery_entity: !input battery
+  threshold_entity: !input threshold
+  car_tracker: !input car_tracker
+  notify_action: !input notify_action
+
+triggers:
+  - trigger: time
+    at: !input at
+
+conditions:
+  - condition: state
+    entity_id: !input person
+    state: home
+  - condition: template
+    value_template: "{{ car_tracker | length == 0 or is_state(car_tracker, 'home') }}"
+  - condition: numeric_state
+    entity_id: !input battery
+    below: !input threshold
+  - condition: state
+    entity_id: !input plugged
+    state: "off"
+
+actions:
+  - action: "{{ notify_action }}"
+    data:
+      title: "🔌 Plug in the car"
+      message: >-
+        Battery is at {{ states(battery_entity) | int(0) }}% (reminder below
+        {{ states(threshold_entity) | int(0) }}%) and the car isn't plugged in.
+      data: { tag: car-plug, group: car }
+  - wait_for_trigger:
+      - trigger: state
+        entity_id: !input plugged
+        to: "on"
+    timeout: { hours: 3 }
+    continue_on_timeout: false
+  - action: "{{ notify_action }}"
+    data:
+      title: "✅ Car plugged in"
+      message: Thanks!
+      data: { tag: car-plug, group: car, push: { interruption-level: passive } }
+  - delay: { minutes: 10 }
+  - action: "{{ notify_action }}"
+    continue_on_error: true
+    data:
+      message: clear_notification
+      data: { tag: car-plug }

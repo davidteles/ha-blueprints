@@ -1,0 +1,111 @@
+blueprint:
+  name: Drying-rack reminder
+  description: >-
+    Once the laundry is out of the machine and on the drying rack, remind
+    someone to put it away: the same evening if it was hung in the morning,
+    otherwise the next evening. The notification has a **Put away** button.
+
+
+    Works together with "Laundry done — stays waiting until it's emptied": when
+    its "laundry waiting" toggle turns off, the laundry is on the rack.
+
+
+    **Create first:** a Toggle "Laundry on the drying rack" and a Date and time
+    helper "Drying-rack reminder at" (both date and time). The date/time helper
+    keeps the reminder through restarts.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/drying_rack_reminder.yaml
+  input:
+    waiting:
+      name: '"Laundry waiting" toggle'
+      description: When this turns off, the laundry is on the rack.
+      selector: { entity: { domain: input_boolean } }
+    on_rack:
+      name: '"Laundry on the drying rack" toggle'
+      selector: { entity: { domain: input_boolean } }
+    reminder_at:
+      name: '"Drying-rack reminder at" date and time helper'
+      selector: { entity: { domain: input_datetime } }
+    reminder_time:
+      name: Reminder time
+      default: "20:00:00"
+      selector: { time: {} }
+    same_day_before:
+      name: Same-day reminder if hung before
+      description: Hung before this hour → reminder the same day; later → the next day.
+      default: 12
+      selector: { number: { min: 0, max: 23, unit_of_measurement: h } }
+    notify_action:
+      name: Notification action
+      description: e.g. notify.mobile_app_your_phone, or a notify group.
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+
+variables:
+  on_rack_entity: !input on_rack
+  reminder_entity: !input reminder_at
+  reminder_time: !input reminder_time
+  cutoff: !input same_day_before
+  notify_action: !input notify_action
+
+triggers:
+  - trigger: state
+    entity_id: !input waiting
+    from: "on"
+    to: "off"
+    id: hung
+  - trigger: time
+    at: !input reminder_at
+    id: due
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LAUNDRY_RACK_DONE }
+    id: put_away
+  - trigger: state
+    entity_id: !input on_rack
+    from: "on"
+    to: "off"
+    id: put_away
+
+actions:
+  - choose:
+      - alias: Laundry hung → schedule the reminder
+        conditions: [{ condition: trigger, id: hung }]
+        sequence:
+          - action: input_boolean.turn_on
+            target: { entity_id: "{{ on_rack_entity }}" }
+          - action: input_datetime.set_datetime
+            target: { entity_id: "{{ reminder_entity }}" }
+            data:
+              datetime: >-
+                {% set at = today_at(reminder_time) %}
+                {{ (at if now().hour < cutoff | int else at + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S') }}
+      - alias: Reminder time
+        conditions:
+          - condition: trigger
+            id: due
+          - condition: template
+            value_template: "{{ is_state(on_rack_entity, 'on') }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "👕 Laundry on the drying rack"
+              message: >-
+                Drying since {{ as_local(states[on_rack_entity].last_changed).strftime('%a %H:%M') }} — time to put it away.
+                👆 Press and hold for: Put away
+              data:
+                tag: laundry-rack
+                group: laundry
+                actions: [{ action: LAUNDRY_RACK_DONE, title: Put away }]
+      - alias: Put away (phone button, or the toggle turned off)
+        conditions: [{ condition: trigger, id: put_away }]
+        sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ on_rack_entity }}" }
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: laundry-rack }

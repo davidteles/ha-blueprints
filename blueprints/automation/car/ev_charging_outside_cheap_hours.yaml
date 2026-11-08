@@ -1,0 +1,72 @@
+blueprint:
+  name: Car charging outside the cheap hours
+  description: >-
+    If your charger is meant to charge only in the cheap-tariff hours, this
+    warns you once when the car has been charging for a while outside them, or
+    is still charging after the cheap hours ended. Usually it means the
+    charger's schedule is wrong.
+
+
+    You need a binary sensor that is **on during the cheap hours** — for
+    example a Schedule helper, or a Time of Day / template sensor for your
+    tariff.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_charging_outside_cheap_hours.yaml
+  input:
+    charging:
+      name: Charging
+      description: An entity that shows the car is charging.
+      selector: { entity: {} }
+    charging_state:
+      name: '"Charging" state'
+      description: The state of that entity while charging (e.g. on, Charging, charging).
+      default: "on"
+      selector: { text: {} }
+    cheap:
+      name: Cheap hours (on = cheap)
+      selector: { entity: { domain: [binary_sensor, schedule, input_boolean] } }
+    grace:
+      name: Grace period
+      default: { minutes: 10 }
+      selector: { duration: {} }
+    price:
+      name: Current price (optional)
+      default: []
+      selector: { entity: { domain: sensor } }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+trigger_variables:
+  charging_entity: !input charging
+  charging_state: !input charging_state
+
+variables:
+  cheap_entity: !input cheap
+  price_entity: !input price
+  notify_action: !input notify_action
+
+triggers:
+  - trigger: template
+    value_template: "{{ is_state(charging_entity, charging_state) }}"
+    for: !input grace
+  - trigger: state
+    entity_id: !input cheap
+    to: "off"
+    for: !input grace
+
+conditions:
+  - condition: template
+    value_template: "{{ is_state(charging_entity, charging_state) and is_state(cheap_entity, 'off') }}"
+
+actions:
+  - action: "{{ notify_action }}"
+    data:
+      title: "🔌 Car charging at the normal price"
+      message: >-
+        The car is charging outside the cheap hours{{ ' (' ~ states(price_entity) ~ ' ' ~ state_attr(price_entity, 'unit_of_measurement') ~ ' now)' if price_entity | length > 0 and has_value(price_entity) else '' }}.
+        Was that on purpose? Check the charger's schedule.
+      data: { tag: charging-not-cheap, group: car }
