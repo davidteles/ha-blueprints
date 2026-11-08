@@ -1,0 +1,153 @@
+blueprint:
+  name: Laundry done — stays "waiting" until it's emptied
+  description: >-
+    When the washer (or dryer) finishes, a "laundry waiting" toggle turns on and
+    one notification is sent with **Remind me later** and **Done** buttons.
+    The toggle stays on until someone empties the machine, so a dashboard can
+    keep showing it even after the machine powers itself off.
+
+
+    It clears itself when you press **Done**, when the next cycle starts, when
+    the machine is switched on again (someone is at it), or when you turn the
+    toggle off from a dashboard — and the phone notification disappears too.
+
+
+    **Create first:** a Toggle helper, e.g. "Laundry waiting".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/laundry_done_until_emptied.yaml
+  input:
+    machine_state:
+      name: Machine state sensor
+      description: The sensor that says what the machine is doing (e.g. the washer's job state).
+      selector: { entity: { domain: sensor } }
+    finished_states:
+      name: '"Finished" states'
+      description: State(s) of that sensor meaning the cycle has finished, separated by commas.
+      default: finish
+      selector: { text: {} }
+    running_states:
+      name: '"New cycle" states'
+      description: State(s) meaning a new cycle has started, separated by commas.
+      default: weight_sensing, pre_wash, wash, ai_wash, delay_wash
+      selector: { text: {} }
+    power:
+      name: Power sensor (optional)
+      description: Turns on when someone switches the machine on. Leave empty if you don't have one.
+      default: []
+      selector: { entity: { domain: binary_sensor } }
+    waiting:
+      name: '"Laundry waiting" toggle'
+      selector: { entity: { domain: input_boolean } }
+    notify_action:
+      name: Notification action
+      description: e.g. notify.mobile_app_your_phone, or a notify group to reach several phones.
+      default: notify.notify
+      selector: { text: {} }
+    snooze:
+      name: Remind me again after
+      default: { minutes: 30 }
+      selector: { duration: {} }
+    title:
+      name: Title
+      default: "🧺 Washing done"
+      selector: { text: {} }
+
+mode: parallel
+max: 10
+
+variables:
+  machine_entity: !input machine_state
+  finished_input: !input finished_states
+  running_input: !input running_states
+  finished_list: "{{ finished_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  running_list: "{{ running_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  waiting_entity: !input waiting
+  notify_action: !input notify_action
+  snooze_input: !input snooze
+  title: !input title
+  buttons:
+    - action: LAUNDRY_SNOOZE
+      title: Remind me later
+    - action: LAUNDRY_DONE
+      title: Done
+
+triggers:
+  - trigger: state
+    entity_id: !input machine_state
+    not_from: [unavailable, unknown]
+    id: machine
+  - trigger: state
+    entity_id: !input power
+    from: ["off", unavailable]
+    to: "on"
+    id: powered_on
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LAUNDRY_DONE }
+    id: done
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LAUNDRY_SNOOZE }
+    id: snooze
+  - trigger: state
+    entity_id: !input waiting
+    from: "on"
+    to: "off"
+    id: cleared_elsewhere
+
+actions:
+  - choose:
+      - alias: Cycle finished
+        conditions:
+          - condition: trigger
+            id: machine
+          - condition: template
+            value_template: "{{ trigger.to_state.state in finished_list }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target: { entity_id: "{{ waiting_entity }}" }
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ title }}"
+              message: "Finished at {{ now().strftime('%H:%M') }} — time to empty it.\n👆 Press and hold for: Remind me later · Done"
+              data: { tag: laundry, group: laundry, actions: "{{ buttons }}" }
+      - alias: Remind me later
+        conditions:
+          - condition: trigger
+            id: snooze
+        sequence:
+          - delay: "{{ snooze_input }}"
+          - condition: template
+            value_template: "{{ is_state(waiting_entity, 'on') }}"
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ title }} — still waiting"
+              message: "Done since {{ as_local(states[waiting_entity].last_changed).strftime('%H:%M') }}.\n👆 Press and hold for: Remind me later · Done"
+              data: { tag: laundry, group: laundry, actions: "{{ buttons }}" }
+      - alias: Emptied, or a new cycle / power-on means someone is at the machine
+        conditions:
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: [done, powered_on]
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: machine
+                  - condition: template
+                    value_template: "{{ trigger.to_state.state in running_list }}"
+          - condition: template
+            value_template: "{{ is_state(waiting_entity, 'on') }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ waiting_entity }}" }
+      - alias: Toggle turned off anywhere → remove the phone notification
+        conditions:
+          - condition: trigger
+            id: cleared_elsewhere
+        sequence:
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: laundry }
