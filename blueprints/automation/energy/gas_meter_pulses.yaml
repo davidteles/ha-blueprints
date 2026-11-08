@@ -1,0 +1,79 @@
+blueprint:
+  name: Gas meter reading from a magnet pulse sensor (with optional heating split)
+  description: >-
+    Most gas meters have a small magnet in the last digit wheel. A cheap
+    door/reed sensor taped next to it "opens and closes" once per turn —
+    typically every 0.01 m³. This counts those pulses into a Counter helper,
+    which a Template sensor turns into kWh for the Energy dashboard.
+
+
+    **Optional heating split:** give it two more counters and something that
+    says "the heating is running" (a thermostat, or your boiler's heating
+    sensor). Every pulse then also goes to *heating* or to *cooking + hot
+    water*, so you can see what heating really costs.
+
+
+    See the README for the helpers and the kWh template.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/energy/gas_meter_pulses.yaml
+  input:
+    pulse:
+      name: Pulse sensor
+      description: The reed/door sensor on the meter.
+      selector: { entity: { domain: binary_sensor } }
+    debounce:
+      name: Ignore pulses shorter than
+      description: Filters contact bounce.
+      default: { milliseconds: 500 }
+      selector: { duration: { enable_millisecond: true } }
+    total:
+      name: Total pulses (Counter helper)
+      selector: { entity: { domain: counter } }
+    heating_counter:
+      name: Heating pulses (Counter helper, optional)
+      default: []
+      selector: { entity: { domain: counter } }
+    other_counter:
+      name: Cooking + hot water pulses (Counter helper, optional)
+      default: []
+      selector: { entity: { domain: counter } }
+    heating_active:
+      name: Heating is running (optional)
+      description: >-
+        A thermostat (counts while it is heating), a binary sensor (counts
+        while on) or a numeric sensor such as heating power % (counts while
+        above 0).
+      default: []
+      selector: { entity: { domain: [climate, binary_sensor, sensor] } }
+
+mode: queued
+max: 20
+
+variables:
+  total: !input total
+  heating_counter: !input heating_counter
+  other_counter: !input other_counter
+  heat: !input heating_active
+  split: "{{ heating_counter | length > 0 and other_counter | length > 0 and heat | length > 0 }}"
+  heating_now: >-
+    {% if heat | length == 0 %}false
+    {% elif heat.startswith('climate.') %}{{ state_attr(heat, 'hvac_action') == 'heating' }}
+    {% elif heat.startswith('binary_sensor.') %}{{ is_state(heat, 'on') }}
+    {% else %}{{ states(heat) | float(0) > 0 }}{% endif %}
+
+triggers:
+  - trigger: state
+    entity_id: !input pulse
+    from: "on"
+    to: "off"
+    for: !input debounce
+
+actions:
+  - action: counter.increment
+    target: { entity_id: "{{ total }}" }
+  - if:
+      - condition: template
+        value_template: "{{ split }}"
+    then:
+      - action: counter.increment
+        target: { entity_id: "{{ heating_counter if heating_now else other_counter }}" }
