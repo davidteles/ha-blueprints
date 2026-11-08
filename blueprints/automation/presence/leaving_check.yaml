@@ -1,0 +1,98 @@
+blueprint:
+  name: Leaving check — anything left open or on?
+  description: >-
+    When the last person leaves home, one notification lists anything left open
+    or on: doors and windows (found automatically, new sensors included),
+    garage doors and lights. With a **Turn off all lights** button. Nothing is
+    sent when everything is closed and off.
+
+
+    Garage doors are listed but deliberately *not* closable from here.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/presence/leaving_check.yaml
+  input:
+    home_zone:
+      name: Home zone
+      default: zone.home
+      selector: { entity: { domain: zone } }
+    covers:
+      name: Garage doors / gates to check
+      default: []
+      selector: { entity: { domain: cover, multiple: true } }
+    ignore:
+      name: Ignore these
+      description: Sensors or lights that are fine to leave on/open (fridge door, a relay that powers other lamps…).
+      default: []
+      selector: { entity: { multiple: true } }
+    check_lights:
+      name: List lights that are on
+      default: true
+      selector: { boolean: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+
+variables:
+  covers: !input covers
+  ignore: !input ignore
+  check_lights: !input check_lights
+  notify_action: !input notify_action
+  openings: >-
+    {{ states.binary_sensor | selectattr('attributes.device_class', 'defined')
+       | selectattr('attributes.device_class', 'in', ['door', 'window', 'garage_door', 'opening'])
+       | selectattr('state', 'eq', 'on') | rejectattr('entity_id', 'in', ignore)
+       | map(attribute='name') | list }}
+  open_covers: >-
+    {{ covers | select('is_state', ['open', 'opening']) | reject('in', ignore)
+       | map('state_attr', 'friendly_name') | list }}
+  lights_on: >-
+    {{ (states.light | selectattr('state', 'eq', 'on') | rejectattr('attributes.entity_id', 'defined')
+       | map(attribute='entity_id') | reject('in', ignore) | list) if check_lights else [] }}
+  items: >-
+    {{ openings + open_covers
+       + (lights_on | map('state_attr', 'friendly_name') | map('regex_replace', '^', '💡 ') | list) }}
+
+triggers:
+  - trigger: numeric_state
+    entity_id: !input home_zone
+    below: 1
+    id: left
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LEAVING_LIGHTS_OFF }
+    id: lights_off
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: left
+          - condition: template
+            value_template: "{{ items | count > 0 }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "🏠 Left on / open at home"
+              message: "{{ items | join(', ') }}{{ '\n👆 Press and hold for: Turn off all lights' if lights_on | count > 0 else '' }}"
+              data:
+                tag: leaving-check
+                actions: >-
+                  {{ [{'action': 'LEAVING_LIGHTS_OFF', 'title': 'Turn off all lights'}] if lights_on | count > 0 else [] }}
+      - conditions: [{ condition: trigger, id: lights_off }]
+        sequence:
+          - variables:
+              to_turn_off: "{{ states.light | selectattr('state', 'eq', 'on') | map(attribute='entity_id') | reject('in', ignore) | list }}"
+          - if:
+              - condition: template
+                value_template: "{{ to_turn_off | count > 0 }}"
+            then:
+              - action: light.turn_off
+                target: { entity_id: "{{ to_turn_off }}" }
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: leaving-check }

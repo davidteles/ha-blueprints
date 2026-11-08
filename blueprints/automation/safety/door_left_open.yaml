@@ -1,0 +1,109 @@
+blueprint:
+  name: Door left open (fridge, garage, freezer…)
+  description: >-
+    A door that should be closed has been open too long → notification. When it
+    closes, the same notification turns into "closed after N min" and then
+    disappears by itself.
+
+
+    For a garage door (a cover) you can add a **Close** button. It is
+    deliberately two-step: press and hold the notification, then confirm with
+    Face ID / fingerprint — never one tap.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/safety/door_left_open.yaml
+  input:
+    door:
+      name: Door
+      description: A door/opening binary sensor, or a cover (garage door).
+      selector: { entity: { domain: [binary_sensor, cover] } }
+    name:
+      name: Name in the notification
+      default: Fridge door
+      selector: { text: {} }
+    wait:
+      name: Open for
+      default: { minutes: 6 }
+      selector: { duration: {} }
+    close_button:
+      name: Add a Close button (covers only)
+      default: false
+      selector: { boolean: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: restart
+
+trigger_variables:
+  door_id: !input door
+
+variables:
+  door: !input door
+  wait_input: !input wait
+  wait_s: >-
+    {{ (wait_input.days | default(0)) * 86400 + (wait_input.hours | default(0)) * 3600
+       + (wait_input.minutes | default(0)) * 60 + (wait_input.seconds | default(0)) }}
+  name: !input name
+  close_button: !input close_button
+  notify_action: !input notify_action
+  is_cover: "{{ door.startswith('cover.') }}"
+  tag: "open-{{ door | replace('.', '-') }}"
+  action_id: "CLOSE_{{ door | upper | replace('.', '_') }}"
+
+triggers:
+  - trigger: state
+    entity_id: !input door
+    to: ["on", "open"]
+    for: !input wait
+    id: open
+  - trigger: state
+    entity_id: !input door
+    from: ["on", "open"]
+    to: ["off", "closed"]
+    id: closed
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: "CLOSE_{{ door_id | upper | replace('.', '_') }}"
+    id: button
+
+actions:
+  - choose:
+      - conditions: [{ condition: trigger, id: open }]
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "🚪 {{ name }} open"
+              message: >-
+                Open since {{ as_local(states[door].last_changed).strftime('%H:%M') }} — please close it.{{ '\n👆 Press and hold to close it (Face ID needed).' if is_cover and close_button else '' }}
+              data:
+                tag: "{{ tag }}"
+                push: { interruption-level: time-sensitive }
+                actions: >-
+                  {{ [{'action': action_id, 'title': 'Close ' ~ name | lower, 'authenticationRequired': true, 'destructive': true}] if is_cover and close_button else [] }}
+      - conditions:
+          - condition: trigger
+            id: closed
+          - condition: template
+            value_template: "{{ (now() - trigger.from_state.last_changed).total_seconds() >= wait_s | int }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "✅ {{ name }} closed"
+              message: "Closed at {{ now().strftime('%H:%M') }} after {{ ((now() - trigger.from_state.last_changed).total_seconds() / 60) | int }} min."
+              data: { tag: "{{ tag }}", push: { interruption-level: passive } }
+          - delay: { minutes: 10 }
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: "{{ tag }}" }
+      - conditions:
+          - condition: trigger
+            id: button
+          - condition: template
+            value_template: "{{ is_cover and is_state(door, 'open') }}"
+        sequence:
+          - action: cover.close_cover
+            target: { entity_id: "{{ door }}" }

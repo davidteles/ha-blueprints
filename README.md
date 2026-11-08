@@ -10,6 +10,24 @@ Small, well-behaved automations from a real home, each one built to stay polite 
 
 > The import buttons work once this repository is public.
 
+## Safety
+
+| Blueprint | What it does | Import |
+|---|---|---|
+| **Smoke / CO / heat alarm response** | Escape-route lights on, bedroom lights red, blinds opened part-way, spoken warning, critical phone alert. Ignores self-tests. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsafety%2Fsmoke_co_heat_response.yaml) |
+| **Weekly safety check** | Every week: are the leak / smoke / door / motion sensors online, how are their batteries? Full report in Home Assistant's notifications, short summary on the phone. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsafety%2Fweekly_safety_check.yaml) |
+| **Safety sensor offline** | A safety sensor offline for an hour can't warn you → message; another when it's back. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsafety%2Fsafety_sensor_offline.yaml) |
+| **Door left open** (fridge, garage, freezer…) | Open too long → alert that turns into "closed after N min" and disappears. Optional two-step *Close* button for garage doors. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsafety%2Fdoor_left_open.yaml) |
+
+## Leaving and arriving
+
+| Blueprint | What it does | Import |
+|---|---|---|
+| **Leaving check — anything left open or on?** | When the last person leaves: one list of open doors/windows, garage doors and lights, with *Turn off all lights*. Silent when all is well. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Fleaving_check.yaml) |
+| **Light on when someone arrives after dark** | Stairs / porch light on for 15 min on arrival after sunset; left alone if someone had switched it on by hand. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Farrival_light.yaml) |
+
+> **Leaving check tip:** cars and other devices sometimes report "window" sensors; add any you don't care about to *Ignore these*.
+
 ## Before you import
 
 Some blueprints need a helper. Create it first under *Settings → Devices & services → Helpers*:
