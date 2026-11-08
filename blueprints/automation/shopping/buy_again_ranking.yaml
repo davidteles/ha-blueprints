@@ -1,0 +1,69 @@
+blueprint:
+  name: Shopping — "buy again" ranked by what you really buy
+  description: >-
+    Looks at everything that has ever been on your shopping list — still open
+    and ticked off — counts how often each item appears, and writes the most
+    frequent ones into a Text helper as "Milk|Eggs|✓Bread|…". Items already on
+    the list get a ✓. Dashboard buttons can then show your real top items, and
+    the companion script "Shopping — add a buy-again item" adds one with a tap.
+
+
+    Works with any to-do list that keeps ticked-off items (Local To-do, the
+    Shopping list integration, most cloud lists).
+
+
+    **Create first:** a Text helper "Buy again" with maximum length 255.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/shopping/buy_again_ranking.yaml
+  input:
+    todo_list:
+      name: Shopping list
+      selector: { entity: { domain: todo } }
+    target:
+      name: Store in (Text helper)
+      selector: { entity: { domain: input_text } }
+    how_many:
+      name: How many items
+      default: 8
+      selector: { number: { min: 2, max: 20 } }
+
+mode: restart
+
+variables:
+  todo_list: !input todo_list
+  target: !input target
+  how_many: !input how_many
+
+triggers:
+  - trigger: state
+    entity_id: !input todo_list
+  - trigger: time
+    at: "04:00:00"
+  - trigger: homeassistant
+    event: start
+
+actions:
+  - delay: { milliseconds: 300 }
+  - action: todo.get_items
+    target: { entity_id: "{{ todo_list }}" }
+    data: { status: [needs_action, completed] }
+    response_variable: r
+  - action: input_text.set_value
+    target: { entity_id: "{{ target }}" }
+    data:
+      value: >-
+        {%- set items = r[todo_list]['items'] -%}
+        {%- set keys = items | map(attribute='summary') | map('trim') | map('lower') | list -%}
+        {%- set open = items | selectattr('status', 'eq', 'needs_action') | map(attribute='summary') | map('trim') | map('lower') | list -%}
+        {%- set ns = namespace(rows=[], out='', k=0) -%}
+        {%- for k in keys | unique -%}
+          {%- set ns.rows = ns.rows + [{'k': k, 'n': keys | select('eq', k) | list | count, 'o': k in open}] -%}
+        {%- endfor -%}
+        {%- for row in ns.rows | sort(attribute='n', reverse=true) -%}
+          {%- set label = ('✓' if row.o else '') ~ row.k[:1] | upper ~ row.k[1:] -%}
+          {%- if ns.k < how_many | int and (ns.out | length) + (label | length) + 1 <= 255 -%}
+            {%- set ns.out = ns.out ~ ('|' if ns.out else '') ~ label -%}
+            {%- set ns.k = ns.k + 1 -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.out }}
