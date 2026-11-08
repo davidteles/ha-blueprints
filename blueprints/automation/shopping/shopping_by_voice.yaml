@@ -1,0 +1,64 @@
+blueprint:
+  name: Shopping list by voice ("we need milk", "what's on the shopping list?")
+  description: >-
+    Extra Assist sentences for your shopping list, on top of Home Assistant's
+    built-in ones: "add milk to the shopping", "we need eggs", "put bread on
+    the list", and "what's on the shopping list?" which reads it back.
+    Adding goes through the "add without duplicates" script, so ticked-off
+    items are reopened instead of added twice.
+
+
+    Works from Assist in the app, a voice satellite, or Siri shortcuts.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/shopping/shopping_by_voice.yaml
+  input:
+    todo_list:
+      name: Shopping list
+      selector: { entity: { domain: todo } }
+    add_script:
+      name: '"Add without duplicates" script'
+      description: A script made from the "Shopping — add a buy-again item" blueprint.
+      selector: { entity: { domain: script } }
+
+mode: queued
+
+variables:
+  todo_list: !input todo_list
+  add_script: !input add_script
+
+triggers:
+  - trigger: conversation
+    command:
+      - "add {item} to [the] shopping [list]"
+      - "add {item} to [the] groceries"
+      - "add {item} to [the] grocery list"
+      - "put {item} on the [shopping] list"
+      - "we need {item}"
+      - "we're out of {item}"
+    id: add
+  - trigger: conversation
+    command:
+      - "what's on the shopping list"
+      - "what is on the shopping list"
+      - "what do we need to buy"
+      - "read the shopping list"
+    id: read
+
+actions:
+  - choose:
+      - conditions: "{{ trigger.id == 'add' }}"
+        sequence:
+          - action: "{{ add_script }}"
+            data: { item: "{{ trigger.slots.item }}" }
+          - set_conversation_response: "Added {{ trigger.slots.item }} to the shopping list."
+      - conditions: "{{ trigger.id == 'read' }}"
+        sequence:
+          - action: todo.get_items
+            target: { entity_id: "{{ todo_list }}" }
+            data: { status: needs_action }
+            response_variable: r
+          - set_conversation_response: >-
+              {% set names = r[todo_list]['items'] | map(attribute='summary') | list %}
+              {% if names | count == 0 %}The shopping list is empty.
+              {% elif names | count == 1 %}Just one thing: {{ names[0] }}.
+              {% else %}{{ names | count }} things: {{ names[:-1] | join(', ') }} and {{ names[-1] }}.{% endif %}
