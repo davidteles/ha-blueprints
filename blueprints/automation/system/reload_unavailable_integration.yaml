@@ -1,0 +1,82 @@
+blueprint:
+  name: Reload a cloud integration that has gone mostly offline
+  description: >-
+    Cloud integrations sometimes lose their connection and never recover by
+    themselves until you press "Reload". Every 30 minutes this checks the
+    integrations you list: if more than half of an integration's entities have
+    been unavailable for at least 30 minutes, it reloads it and tells you (5
+    minutes later) whether that helped.
+
+
+    Find an integration's name in the address bar of its page, e.g.
+    /config/integrations/integration/**tado** → `tado`.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/system/reload_unavailable_integration.yaml
+  input:
+    integrations:
+      name: Integrations to watch
+      description: Separated by commas, e.g. tado, netatmo, smartthings
+      selector: { text: {} }
+    share:
+      name: Reload when more than this share is unavailable
+      default: 50
+      selector: { number: { min: 10, max: 100, unit_of_measurement: "%" } }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+variables:
+  integrations_input: !input integrations
+  share: !input share
+  notify_action: !input notify_action
+  watched: "{{ integrations_input.split(',') | map('trim') | reject('eq', '') | list }}"
+
+triggers:
+  - trigger: time_pattern
+    minutes: /30
+
+actions:
+  - variables:
+      bad: >-
+        {%- set ns = namespace(out=[]) -%}
+        {%- for i in watched -%}
+          {%- set ents = integration_entities(i) -%}
+          {%- set long_gone = expand(ents) | selectattr('state', 'eq', 'unavailable')
+                | selectattr('last_changed', 'lt', now() - timedelta(minutes=30)) | list -%}
+          {%- if ents | count > 0 and (long_gone | count) / (ents | count) * 100 > share | float -%}
+            {%- set ns.out = ns.out + [i] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.out }}
+  - condition: template
+    value_template: "{{ bad | count > 0 }}"
+  - repeat:
+      for_each: "{{ bad }}"
+      sequence:
+        - variables:
+            ents: "{{ integration_entities(repeat.item) }}"
+            before: "{{ ents | select('is_state', 'unavailable') | list | count }}"
+        - action: "{{ notify_action }}"
+          data:
+            title: "🔄 Reloading {{ repeat.item }}"
+            message: "{{ before }} of {{ ents | count }} entities have been unavailable for 30 minutes."
+            data: { tag: "watchdog-{{ repeat.item }}" }
+        - action: homeassistant.reload_config_entry
+          target: { entity_id: "{{ ents }}" }
+          continue_on_error: true
+  - delay: { minutes: 5 }
+  - repeat:
+      for_each: "{{ bad }}"
+      sequence:
+        - variables:
+            ents: "{{ integration_entities(repeat.item) }}"
+            after: "{{ ents | select('is_state', 'unavailable') | list | count }}"
+        - action: "{{ notify_action }}"
+          data:
+            title: "{{ '✅ ' ~ repeat.item ~ ' is back' if (after | int) / (ents | count) * 100 <= share | float else '⚠️ ' ~ repeat.item ~ ' is still down' }}"
+            message: >-
+              {{ after }} of {{ ents | count }} entities still unavailable{{ '' if (after | int) / (ents | count) * 100 <= share | float else ' — check the integration or the cloud service' }}.
+            data: { tag: "watchdog-{{ repeat.item }}" }
