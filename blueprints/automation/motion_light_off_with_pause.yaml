@@ -1,0 +1,54 @@
+blueprint:
+  name: Motion light auto-off, with a pause timer
+  description: >-
+    Turns a light off after no motion for a while. A timer helper pauses the
+    auto-off (start it for 30 min, 1 h… from a dashboard button) while you're busy
+    there. When the pause ends or is cancelled, the light goes off only if there
+    has also been no motion for the same time; otherwise the normal rule takes over.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/motion_light_off_with_pause.yaml
+  input:
+    motion:
+      name: Motion sensor
+      selector: { entity: { domain: binary_sensor } }
+    light:
+      name: Light (or switch) to turn off
+      selector: { entity: { domain: [light, switch] } }
+    pause_timer:
+      name: Pause timer
+      description: A timer helper. Start it from a dashboard button to pause the auto-off.
+      selector: { entity: { domain: timer } }
+    no_motion_minutes:
+      name: Minutes without motion
+      default: 5
+      selector: { number: { min: 1, max: 60, unit_of_measurement: min } }
+triggers:
+  - trigger: state
+    entity_id: !input motion
+    to: "off"
+    for: { minutes: !input no_motion_minutes }
+  - trigger: event
+    event_type: timer.finished
+    event_data: { entity_id: !input pause_timer }
+  - trigger: event
+    event_type: timer.cancelled
+    event_data: { entity_id: !input pause_timer }
+conditions:
+  - condition: state
+    entity_id: !input light
+    state: "on"
+  - alias: Not paused
+    condition: not
+    conditions:
+      - condition: state
+        entity_id: !input pause_timer
+        state: active
+  - alias: No motion for the set time (also checked when a pause ends)
+    condition: state
+    entity_id: !input motion
+    state: "off"
+    for: { minutes: !input no_motion_minutes }
+actions:
+  - action: homeassistant.turn_off
+    target: { entity_id: !input light }
+mode: single

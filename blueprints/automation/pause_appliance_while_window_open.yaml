@@ -1,0 +1,78 @@
+blueprint:
+  name: Pause an appliance while a window is open
+  description: >-
+    Window open for a while → switch the appliance off (heater, dehumidifier, AC,
+    fan…). Window closed → switch it back on, but only if this automation was the
+    one that paused it. If someone switches it on while the window is open, it's
+    left alone.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/pause_appliance_while_window_open.yaml
+  input:
+    window:
+      name: Window or door sensor
+      selector: { entity: { domain: binary_sensor } }
+    appliance:
+      name: Appliance
+      selector: { entity: { domain: [humidifier, climate, fan, switch] } }
+    paused_flag:
+      name: "Paused by window" helper
+      description: An input_boolean that remembers the automation paused the appliance.
+      selector: { entity: { domain: input_boolean } }
+    open_minutes:
+      name: Minutes open before pausing
+      default: 5
+      selector: { number: { min: 1, max: 60, unit_of_measurement: min } }
+    closed_minutes:
+      name: Minutes closed before resuming
+      default: 1
+      selector: { number: { min: 0, max: 30, unit_of_measurement: min } }
+triggers:
+  - trigger: state
+    entity_id: !input window
+    to: "on"
+    for: { minutes: !input open_minutes }
+    id: open
+  - trigger: state
+    entity_id: !input window
+    to: "off"
+    for: { minutes: !input closed_minutes }
+    id: closed
+  - trigger: state
+    entity_id: !input appliance
+    from: "off"
+    id: switched_on
+variables:
+  appliance: !input appliance
+  flag: !input paused_flag
+  window: !input window
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: open
+          - condition: template
+            value_template: "{{ states(appliance) not in ['off', 'unavailable', 'unknown'] }}"
+        sequence:
+          - action: input_boolean.turn_on
+            target: { entity_id: !input paused_flag }
+          - action: homeassistant.turn_off
+            target: { entity_id: !input appliance }
+      - conditions:
+          - condition: trigger
+            id: closed
+          - condition: template
+            value_template: "{{ is_state(flag, 'on') }}"
+        sequence:
+          - action: homeassistant.turn_on
+            target: { entity_id: !input appliance }
+          - action: input_boolean.turn_off
+            target: { entity_id: !input paused_flag }
+      - conditions:
+          - condition: trigger
+            id: switched_on
+          - condition: template
+            value_template: "{{ is_state(flag, 'on') and is_state(window, 'on') }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: !input paused_flag }
+mode: queued
