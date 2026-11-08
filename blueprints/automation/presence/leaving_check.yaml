@@ -24,6 +24,14 @@ blueprint:
       description: Sensors or lights that are fine to leave on/open (fridge door, a relay that powers other lamps…).
       default: []
       selector: { entity: { multiple: true } }
+    ignore_label:
+      name: Ignore everything with this label
+      description: >-
+        The easy way: create a label such as "Ignore" (Settings → Areas, labels
+        & zones → Labels) and put it on any entity or whole device you never
+        want listed — a car's window sensors, a fridge door, a lamp relay.
+      default: ""
+      selector: { label: {} }
     check_lights:
       name: List lights that are on
       default: true
@@ -37,7 +45,11 @@ mode: queued
 
 variables:
   covers: !input covers
-  ignore: !input ignore
+  ignore_input: !input ignore
+  ignore_label: !input ignore_label
+  ignore: >-
+    {% set by_label = (label_entities(ignore_label) + (label_devices(ignore_label) | map('device_entities') | sum(start=[]))) if ignore_label else [] %}
+    {{ (ignore_input + by_label) | unique | list }}
   check_lights: !input check_lights
   notify_action: !input notify_action
   openings: >-
