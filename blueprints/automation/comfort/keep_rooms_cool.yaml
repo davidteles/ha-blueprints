@@ -1,0 +1,128 @@
+blueprint:
+  name: Keep rooms cool on hot afternoons (blinds part-way down)
+  description: >-
+    On a hot afternoon with nobody home, bring the sunny side's blinds down —
+    not all the way, so plants still get light. They open again when the sun
+    is off the windows, or as soon as someone comes home. Only blinds this
+    automation lowered are opened again, so it never fights you.
+
+
+    **Create first:** a Toggle helper, e.g. "Blinds lowered for heat".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/comfort/keep_rooms_cool.yaml
+  input:
+    outdoor:
+      name: Outdoor temperature
+      selector: { entity: { domain: sensor, device_class: temperature } }
+    hot:
+      name: Hot above
+      default: 26
+      selector: { number: { min: 15, max: 45, step: 0.5, unit_of_measurement: "°C" } }
+    covers:
+      name: Blinds on the sunny side
+      selector: { entity: { domain: cover, multiple: true } }
+    position:
+      name: Lower them to (% open)
+      default: 30
+      selector: { number: { min: 0, max: 90, unit_of_measurement: "%" } }
+    start:
+      name: Sun on the windows from
+      default: "11:00:00"
+      selector: { time: {} }
+    end:
+      name: Sun off the windows at
+      default: "17:00:00"
+      selector: { time: {} }
+    home_zone:
+      name: Home zone
+      default: zone.home
+      selector: { entity: { domain: zone } }
+    flag:
+      name: '"Lowered for heat" toggle'
+      selector: { entity: { domain: input_boolean } }
+
+mode: queued
+max: 5
+
+variables:
+  covers: !input covers
+  position: !input position
+  flag: !input flag
+
+triggers:
+  - trigger: numeric_state
+    entity_id: !input outdoor
+    above: !input hot
+    for: { minutes: 10 }
+    id: hot
+  - trigger: numeric_state
+    entity_id: !input home_zone
+    below: 1
+    for: { minutes: 10 }
+    id: hot
+  - trigger: time
+    at: !input start
+    id: hot
+  - trigger: numeric_state
+    entity_id: !input home_zone
+    above: 0
+    id: arrived
+  - trigger: time
+    at: !input end
+    id: done
+  - trigger: sun
+    event: sunset
+    id: sunset
+
+actions:
+  - choose:
+      - alias: Hot and nobody home → lower them part-way
+        conditions:
+          - condition: trigger
+            id: hot
+          - condition: time
+            after: !input start
+            before: !input end
+          - condition: numeric_state
+            entity_id: !input home_zone
+            below: 1
+          - condition: numeric_state
+            entity_id: !input outdoor
+            above: !input hot
+          - condition: template
+            value_template: "{{ is_state(flag, 'off') }}"
+          - condition: template
+            value_template: >-
+              {{ covers | map('state_attr', 'current_position') | select('is_number')
+                 | select('gt', position | int) | list | count > 0 }}
+        sequence:
+          - action: cover.set_cover_position
+            target: { entity_id: "{{ covers }}" }
+            data: { position: "{{ position | int }}" }
+          - action: input_boolean.turn_on
+            target: { entity_id: "{{ flag }}" }
+      - alias: Someone home while the sun is up, or the sun is off the windows → open them
+        conditions:
+          - condition: trigger
+            id: [arrived, done]
+          - condition: template
+            value_template: "{{ is_state(flag, 'on') }}"
+          - condition: or
+            conditions:
+              - condition: trigger
+                id: done
+              - condition: state
+                entity_id: sun.sun
+                state: above_horizon
+        sequence:
+          - action: cover.open_cover
+            target: { entity_id: "{{ covers }}" }
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ flag }}" }
+      - alias: Sunset → your evening automations take over
+        conditions:
+          - condition: trigger
+            id: [sunset, arrived]
+        sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ flag }}" }

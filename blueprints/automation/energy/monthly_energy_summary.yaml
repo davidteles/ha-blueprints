@@ -1,0 +1,122 @@
+blueprint:
+  name: Monthly home energy summary
+  description: >-
+    On the 1st of each month: last month's electricity and gas — energy, cost
+    and the change versus the month before — read from Home Assistant's
+    long-term statistics (the same data as the Energy dashboard). The full
+    breakdown goes into Home Assistant's notifications; your phone gets one
+    line with the total, and tapping it opens the Energy dashboard.
+
+
+    Use the same sensors as your Energy dashboard: total_increasing energy
+    sensors and, if you have them, their cost sensors.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/energy/monthly_energy_summary.yaml
+  input:
+    electricity:
+      name: Electricity energy (kWh)
+      selector: { entity: { domain: sensor, device_class: energy } }
+    electricity_cost:
+      name: Electricity cost (optional)
+      default: []
+      selector: { entity: { domain: sensor } }
+    gas:
+      name: Gas energy (optional)
+      default: []
+      selector: { entity: { domain: sensor } }
+    gas_cost:
+      name: Gas cost (optional)
+      default: []
+      selector: { entity: { domain: sensor } }
+    extra:
+      name: Extra line, e.g. car charging (optional)
+      default: []
+      selector: { entity: { domain: sensor, device_class: energy } }
+    extra_label:
+      name: Extra line label
+      default: "🚗 Car charging"
+      selector: { text: {} }
+    currency:
+      name: Currency symbol
+      default: "€"
+      selector: { text: {} }
+    at:
+      name: Send at
+      default: "09:00:00"
+      selector: { time: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+variables:
+  e: !input electricity
+  ec: !input electricity_cost
+  g: !input gas
+  gc: !input gas_cost
+  x: !input extra
+  x_label: !input extra_label
+  cur: !input currency
+  notify_action: !input notify_action
+  ids: "{{ [e, ec, g, gc, x] | reject('eq', []) | reject('eq', '') | list }}"
+  this_start: "{{ today_at('00:00').replace(day=1) }}"
+  last_start: "{{ (today_at('00:00').replace(day=1) - timedelta(days=1)).replace(day=1) }}"
+  prev_start: "{{ ((today_at('00:00').replace(day=1) - timedelta(days=1)).replace(day=1) - timedelta(days=1)).replace(day=1) }}"
+
+triggers:
+  - trigger: time
+    at: !input at
+
+conditions:
+  - condition: template
+    value_template: "{{ now().day == 1 }}"
+
+actions:
+  - action: recorder.get_statistics
+    data:
+      statistic_ids: "{{ ids }}"
+      start_time: "{{ last_start }}"
+      end_time: "{{ this_start }}"
+      period: month
+      types: [change]
+    response_variable: last
+  - action: recorder.get_statistics
+    data:
+      statistic_ids: "{{ ids }}"
+      start_time: "{{ prev_start }}"
+      end_time: "{{ last_start }}"
+      period: month
+      types: [change]
+    response_variable: prev
+  - variables:
+      L: >-
+        {% set o = namespace(d={}) %}{% for k, rows in last.statistics.items() %}{% set s = namespace(v=0) %}{% for r in rows %}{% if as_timestamp(r.start) < as_timestamp(this_start) and r.change is number %}{% set s.v = s.v + r.change %}{% endif %}{% endfor %}{% set o.d = dict(o.d, **{k: s.v}) %}{% endfor %}{{ o.d }}
+      P: >-
+        {% set o = namespace(d={}) %}{% for k, rows in prev.statistics.items() %}{% set s = namespace(v=0) %}{% for r in rows %}{% if as_timestamp(r.start) < as_timestamp(last_start) and r.change is number %}{% set s.v = s.v + r.change %}{% endif %}{% endfor %}{% set o.d = dict(o.d, **{k: s.v}) %}{% endfor %}{{ o.d }}
+      month: "{{ as_datetime(last_start).strftime('%B') }}"
+      prev_month: "{{ as_datetime(prev_start).strftime('%B') }}"
+  - variables:
+      total: "{{ (L.get(ec, 0) if ec else 0) + (L.get(gc, 0) if gc else 0) }}"
+      total_prev: "{{ (P.get(ec, 0) if ec else 0) + (P.get(gc, 0) if gc else 0) }}"
+      report: >-
+        {%- macro change(now_v, before) -%}{%- if before > 0 %} ({{ '+' if now_v >= before else '' }}{{ ((now_v - before) / before * 100) | round(0) | int }}% vs {{ prev_month }}){%- endif -%}{%- endmacro -%}
+        {%- set lines = ['**⚡ Electricity:** ' ~ (L.get(e, 0) | round(0) | int) ~ ' kWh'
+             ~ ((' · ' ~ cur ~ '%.2f' % L.get(ec, 0) ~ change(L.get(ec, 0), P.get(ec, 0))) if ec else change(L.get(e, 0), P.get(e, 0)))] -%}
+        {%- if g -%}{%- set lines = lines + ['**🔥 Gas:** ' ~ (L.get(g, 0) | round(0) | int) ~ ' kWh'
+             ~ ((' · ' ~ cur ~ '%.2f' % L.get(gc, 0) ~ change(L.get(gc, 0), P.get(gc, 0))) if gc else change(L.get(g, 0), P.get(g, 0)))] -%}{%- endif -%}
+        {%- if x -%}{%- set lines = lines + ['**' ~ x_label ~ ':** ' ~ (L.get(x, 0) | round(1)) ~ ' kWh'] -%}{%- endif -%}
+        {%- if total > 0 -%}{%- set lines = lines + ['**Total: ' ~ cur ~ '%.2f' % total ~ '**' ~ change(total, total_prev)] -%}{%- endif -%}
+        {{ lines | join('\n\n') }}
+  - action: persistent_notification.create
+    data:
+      notification_id: monthly_home_summary
+      title: "📊 {{ month }} at home"
+      message: "{{ report }}"
+  - action: "{{ notify_action }}"
+    data:
+      title: "📊 {{ month }} at home"
+      message: >-
+        {% if total > 0 %}{{ cur }}{{ '%.2f' % total }} for energy{% if total_prev > 0 %} ({{ '+' if total >= total_prev else '' }}{{ ((total - total_prev) / total_prev * 100) | round(0) | int }}% vs {{ prev_month }}){% endif %}.{% else %}{{ L.get(e, 0) | round(0) | int }} kWh of electricity.{% endif %} Tap for the details.
+      data: { tag: monthly-summary, url: /energy }

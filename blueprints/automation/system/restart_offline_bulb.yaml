@@ -1,0 +1,58 @@
+blueprint:
+  name: Restart a smart bulb that dropped offline
+  description: >-
+    Some Wi-Fi bulbs drop off the network and only come back after a power
+    cut. If your bulb is powered through a smart relay (a Shelly or similar
+    behind the wall switch), this power-cycles the relay when the bulb has been
+    unavailable for a while. Bulbs come back *on* after a power cut, so it can
+    switch it off again afterwards.
+
+
+    Never use this on a relay that also powers anything else.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/system/restart_offline_bulb.yaml
+  input:
+    bulb:
+      name: Bulb
+      selector: { entity: { domain: light } }
+    relay:
+      name: Relay that powers it
+      selector: { entity: { domain: [switch, light] } }
+    wait:
+      name: Unavailable for
+      default: { seconds: 30 }
+      selector: { duration: {} }
+    off_after:
+      name: Switch the bulb off once it's back
+      default: true
+      selector: { boolean: {} }
+
+mode: single
+max_exceeded: silent
+
+variables:
+  bulb: !input bulb
+  relay: !input relay
+  off_after: !input off_after
+
+triggers:
+  - trigger: state
+    entity_id: !input bulb
+    to: unavailable
+    for: !input wait
+
+actions:
+  - action: homeassistant.turn_off
+    target: { entity_id: "{{ relay }}" }
+  - delay: { seconds: 2 }
+  - action: homeassistant.turn_on
+    target: { entity_id: "{{ relay }}" }
+  - wait_template: "{{ not is_state(bulb, 'unavailable') }}"
+    timeout: { minutes: 1 }
+    continue_on_timeout: false
+  - if:
+      - condition: template
+        value_template: "{{ off_after }}"
+    then:
+      - action: light.turn_off
+        target: { entity_id: "{{ bulb }}" }

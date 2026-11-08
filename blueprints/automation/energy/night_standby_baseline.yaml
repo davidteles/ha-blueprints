@@ -1,0 +1,90 @@
+blueprint:
+  name: Always-on power (night standby baseline)
+  description: >-
+    Every morning, measures what your house draws when everything is asleep —
+    fridge, router, chargers, devices on standby — and stores it in a Number
+    helper for a dashboard. It takes the lowest 5-minute average of your house
+    power during the night. If you charge a car at night, give its power sensor
+    and the minutes when it was drawing power are left out.
+
+
+    Needs long-term statistics for the power sensor (state_class: measurement).
+
+
+    **Create first:** a Number helper, e.g. "Night standby power" (0–5000 W,
+    box mode).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/energy/night_standby_baseline.yaml
+  input:
+    power:
+      name: House power (W)
+      selector: { entity: { domain: sensor, device_class: power } }
+    exclude:
+      name: Leave out while this draws power (optional)
+      description: e.g. the car charger's power sensor.
+      default: []
+      selector: { entity: { domain: sensor, device_class: power } }
+    exclude_above:
+      name: …when it is above
+      default: 150
+      selector: { number: { min: 10, max: 5000, unit_of_measurement: W } }
+    window_start:
+      name: Night window from
+      default: "02:00:00"
+      selector: { time: {} }
+    window_end:
+      name: Night window to
+      default: "05:00:00"
+      selector: { time: {} }
+    run_at:
+      name: Store it at
+      default: "05:05:00"
+      selector: { time: {} }
+    target:
+      name: Store in (Number helper)
+      selector: { entity: { domain: input_number } }
+
+mode: single
+
+variables:
+  power: !input power
+  exclude: !input exclude
+  exclude_above: !input exclude_above
+  window_start: !input window_start
+  window_end: !input window_end
+  target: !input target
+  ids: "{{ [power] + ([exclude] if exclude | length > 0 else []) }}"
+
+triggers:
+  - trigger: time
+    at: !input run_at
+
+actions:
+  - action: recorder.get_statistics
+    data:
+      statistic_ids: "{{ ids }}"
+      start_time: "{{ today_at(window_start) }}"
+      end_time: "{{ today_at(window_end) }}"
+      period: 5minute
+      types: [mean]
+    response_variable: stats
+  - variables:
+      samples: >-
+        {%- set h = stats.statistics.get(power, []) -%}
+        {%- set g = stats.statistics.get(exclude, []) if exclude | length > 0 else [] -%}
+        {%- set ns = namespace(v=[]) -%}
+        {%- for row in h if row.mean is number -%}
+          {%- if exclude | length > 0 -%}
+            {%- set gm = g | selectattr('start', 'eq', row.start) | map(attribute='mean') | select('number') | list -%}
+            {%- if gm and gm[0] < exclude_above | float -%}{%- set ns.v = ns.v + [row.mean - gm[0]] -%}{%- endif -%}
+          {%- else -%}
+            {%- set ns.v = ns.v + [row.mean] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.v | select('ge', 0) | list }}
+  - alias: No clean 5-minute period (e.g. the car charged all night) → keep yesterday's value
+    condition: template
+    value_template: "{{ samples | count > 0 }}"
+  - action: input_number.set_value
+    target: { entity_id: "{{ target }}" }
+    data: { value: "{{ samples | min | round(0) }}" }

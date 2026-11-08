@@ -1,0 +1,48 @@
+blueprint:
+  name: Shower detection turns the bathroom light on
+  description: >-
+    When someone is in the bathroom with only the mirror light on and the
+    humidity starts rising fast — a shower — the main light comes on too.
+
+
+    You need a **Derivative** helper on the bathroom humidity sensor (Settings
+    → Devices & services → Helpers → Derivative sensor, time unit: minutes).
+    A shower usually pushes it well above 2 %/min.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/lights/shower_light.yaml
+  input:
+    humidity_rate:
+      name: Humidity rise (Derivative helper)
+      selector: { entity: { domain: sensor } }
+    rise_above:
+      name: Shower when rising faster than
+      default: 2
+      selector: { number: { min: 0.5, max: 50, step: 0.5, unit_of_measurement: "%/min" } }
+    while_on:
+      name: Only while this is on (mirror light), optional
+      default: []
+      selector: { entity: { domain: [light, switch] } }
+    turn_on:
+      name: Turn on
+      selector: { entity: { domain: [light, switch] } }
+
+mode: single
+
+variables:
+  while_on: !input while_on
+  turn_on_entity: !input turn_on
+
+triggers:
+  - trigger: numeric_state
+    entity_id: !input humidity_rate
+    above: !input rise_above
+
+conditions:
+  - condition: template
+    value_template: "{{ while_on | length == 0 or is_state(while_on, 'on') }}"
+  - condition: template
+    value_template: "{{ is_state(turn_on_entity, 'off') }}"
+
+actions:
+  - action: homeassistant.turn_on
+    target: { entity_id: "{{ turn_on_entity }}" }

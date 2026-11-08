@@ -1,0 +1,81 @@
+blueprint:
+  name: One button, several jobs (single / double / triple / long press)
+  description: >-
+    Give one physical button up to four jobs: e.g. single press = sofa lamp,
+    double press = decorative lights, long press = TV off.
+
+
+    Works with any button that shows up as an **event entity** in Home
+    Assistant (Shelly, Matter, Hue, Z-Wave, Zigbee…). Different brands name
+    their presses differently, so each press type accepts a list of names; the
+    defaults cover the common ones. To see your button's names, open the event
+    entity and press it: the attribute *event_type* shows what it sent.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/buttons/one_button_several_jobs.yaml
+  input:
+    button:
+      name: Button (event entity)
+      selector: { entity: { domain: event } }
+    single:
+      name: Single press
+      default: []
+      selector: { action: {} }
+    double:
+      name: Double press
+      default: []
+      selector: { action: {} }
+    triple:
+      name: Triple press
+      default: []
+      selector: { action: {} }
+    long:
+      name: Long press
+      default: []
+      selector: { action: {} }
+    names:
+      name: Press names (advanced)
+      collapsed: true
+      input:
+        single_names:
+          name: '"Single" names'
+          default: single, multi_press_1, press, short_release, initial_press
+          selector: { text: {} }
+        double_names:
+          name: '"Double" names'
+          default: double, multi_press_2, double_press
+          selector: { text: {} }
+        triple_names:
+          name: '"Triple" names'
+          default: triple, multi_press_3, triple_press
+          selector: { text: {} }
+        long_names:
+          name: '"Long" names'
+          default: long, long_press, long_release, hold
+          selector: { text: {} }
+
+mode: queued
+max: 10
+
+variables:
+  s_in: !input single_names
+  d_in: !input double_names
+  t_in: !input triple_names
+  l_in: !input long_names
+  press: "{{ trigger.to_state.attributes.event_type | default('') }}"
+
+triggers:
+  - trigger: state
+    entity_id: !input button
+    not_from: [unavailable, unknown]
+    not_to: [unavailable, unknown]
+
+actions:
+  - choose:
+      - conditions: "{{ press in s_in.split(',') | map('trim') | list }}"
+        sequence: !input single
+      - conditions: "{{ press in d_in.split(',') | map('trim') | list }}"
+        sequence: !input double
+      - conditions: "{{ press in t_in.split(',') | map('trim') | list }}"
+        sequence: !input triple
+      - conditions: "{{ press in l_in.split(',') | map('trim') | list }}"
+        sequence: !input long
