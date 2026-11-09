@@ -176,15 +176,15 @@ actions:
         value_template: "{{ phase in tags }}"
     then:
       - variables:
-          range_text: "{{ (' · ' ~ km ~ ' ' ~ km_unit) if km > 0 else '' }}"
+          range_text: "{{ (km ~ ' ' ~ km_unit) if km > 0 else '' }}"
       - action: "{{ notify_action }}"
         data:
           title: >-
             {{ {'waiting': '🔌 ' ~ name ~ ' plugged in', 'charging': '⚡ ' ~ name ~ ' charging', 'charged': '✅ ' ~ name ~ ' charged'}[phase] }}
           message: >-
-            {% if phase == 'waiting' %}{{ ('Already at ' ~ soc ~ '%') if soc >= target - 1 else ('Waiting to charge · ' ~ soc ~ '% → ' ~ target ~ '%') }}{{ range_text }}
-            {%- elif phase == 'charging' %}{{ soc }}% → {{ target }}%{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ range_text }}
-            {%- else %}{{ soc }}%{{ range_text }} · unplug when you go{% endif %}
+            {% if phase == 'waiting' %}{{ ('Already at ' ~ soc ~ '%') if soc >= target - 1 else ('Waiting to charge · ' ~ soc ~ '% → ' ~ target ~ '%') }}{{ (' · ' ~ range_text) if range_text else '' }}
+            {%- elif phase == 'charging' %}{{ soc }}% → {{ target }}%{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ (' · ' ~ range_text) if range_text else '' }}
+            {%- else %}{{ soc }}%{{ (' · ' ~ range_text) if range_text else '' }} · unplug when you go{% endif %}
           data:
             tag: "{{ tags[phase] }}"
             live_update: true
