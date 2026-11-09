@@ -71,6 +71,9 @@ triggers:
   - trigger: numeric_state
     entity_id: !input home_zone
     below: 1
+    # A phone app reload makes its person 'unknown' for a split second, which
+    # empties the zone briefly; only count it once nobody has been home for 1 min.
+    for: { minutes: 1 }
     id: left
   - trigger: event
     event_type: mobile_app_notification_action
