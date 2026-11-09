@@ -27,6 +27,18 @@ Small, well-behaved automations from a real home, each one built to stay polite 
 | **Charging session cost at your live price** | Adds up each session at Home Assistant's own electricity price, kWh by kWh; remembers the last session for a dashboard card. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcar%2Fev_charging_session_cost.yaml) |
 | **Car left unlocked while you're away** | Unlocked for a few minutes while you're more than 100 m from the car → alert. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcar%2Fcar_unlocked_while_away.yaml) |
 
+## Live Activities (iPhone lock screen)
+
+> **Needs an iPhone with Live Activities turned on** — iOS 17.2 or later and the Home Assistant app 2026.x. Turn them on in two places: on the iPhone, **Settings → Home Assistant → Live Activities**, and in the Home Assistant app, **Settings → Live Activities** (accept the one-time notice). Without that, nothing is shown. Each blueprint also needs a **Text helper** (max 20) to remember its phase.
+
+| Blueprint | What it does | Import |
+|---|---|---|
+| **Appliance Live Activity** (washer, dryer, dishwasher) | ⏰ *Programmed* with the finish time → stage, progress bar and "50 min left · done around 15:30" → ✅ *done* with reminders, closing by itself when it's emptied (or after a while). | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Fappliance_live_activity.yaml) |
+| **EV charging Live Activity** | 🔌 *Plugged in, waiting* → ⚡ battery %, power and range → ✅ *charged* (alerts once, quietly at night). Closes when you unplug. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcar%2Fev_charging_live_activity.yaml) |
+| **Robot vacuum Live Activity** | 🧹 m², minutes and battery while it cleans (⚠️ when it needs help) → ✅ *finished*, closing by itself. Learns how big each job is, then shows a progress bar and the time left. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcleaning%2Frobot_vacuum_live_activity.yaml) |
+
+Each phase is its own Live Activity, so a long delayed start or a long wait for cheap hours can't hit the 8-hour iOS limit.
+
 ## Shopping
 
 | Blueprint | What it does | Import |
@@ -62,6 +74,7 @@ tap_action:
 |---|---|---|
 | **Leaving check — anything left open or on?** | When the last person leaves: one list of open doors/windows, garage doors and lights, with *Turn off all lights*. Silent when all is well. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Fleaving_check.yaml) |
 | **Light on when someone arrives after dark** | Stairs / porch light on for 15 min on arrival after sunset; left alone if someone had switched it on by hand. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Farrival_light.yaml) |
+| **Forgotten phone — ask before arming** | Someone left, another phone still says *home*, but nothing moves → whoever is away is asked *Arm the alarm* / *Someone's home*. Never arms by itself; ignores phone-app reload blips. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Fforgotten_phone_ask_to_arm.yaml) |
 
 > **Leaving check tip:** cars and other devices sometimes report "window" sensors; add any you don't care about to *Ignore these*.
 
@@ -92,6 +105,7 @@ tap_action:
 |---|---|---|
 | **Reload a cloud integration that has gone mostly offline** | Every 30 min: an integration with most entities unavailable for 30+ min is reloaded, and you're told if it came back. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsystem%2Freload_unavailable_integration.yaml) |
 | **Restart a smart bulb that dropped offline** | Power-cycles the relay behind a Wi-Fi bulb that went unavailable, then switches the bulb off again. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsystem%2Frestart_offline_bulb.yaml) |
+| **Pause heavy apps while a backup runs** | Stops the apps you choose (a speech model, a media server…) just before the scheduled backup and starts them again when it's done. Safety nets if the backup hangs or Home Assistant restarts. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsystem%2Fpause_apps_during_backups.yaml) |
 
 ## Gas meter
 

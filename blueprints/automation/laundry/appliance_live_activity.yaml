@@ -1,0 +1,304 @@
+blueprint:
+  name: Appliance Live Activity — programmed, running, done
+  description: >-
+    **Needs an iPhone with Live Activities turned on** (iOS 17.2 or later, Home
+    Assistant app 2026.x): on the iPhone, Settings → Home Assistant → Live
+    Activities, and in the Home Assistant app, Settings → Live Activities
+    (accept the one-time notice). Without that, nothing is shown.
+
+
+    A Live Activity on the iPhone's lock screen and Dynamic Island that follows
+    a washer, dryer or dishwasher through its cycle:
+
+
+    **⏰ Programmed** (delayed start) with the expected finish time →
+    **running** with the stage, a progress bar, a countdown and "N min left ·
+    done around 15:30" → **✅ done** until it's emptied, with reminders.
+
+
+    Each phase is its own Live Activity, so a long delayed start can't hit the
+    8-hour iOS limit, and the done card closes by itself: when a "laundry
+    waiting" toggle turns off (e.g. from the *Laundry done* blueprint), or after
+    a set time if you don't use one.
+
+
+    **Create first:** a **Text helper** (max 20 characters) for this blueprint
+    to remember the phase, e.g. "Washer live phase".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/appliance_live_activity.yaml
+  input:
+    job_state:
+      name: Cycle / job state sensor
+      description: The sensor that says which stage the cycle is in (e.g. a Samsung washer's "Job state").
+      selector: { entity: { domain: sensor } }
+    programmed_states:
+      name: '"Programmed / delayed start" states'
+      description: Separated by commas. Leave empty if your machine has no delayed start.
+      default: delay_wash
+      selector: { text: {} }
+    running_states:
+      name: '"Running" states'
+      description: Separated by commas.
+      default: pre_wash, wash, ai_wash, rinse, ai_rinse, spin, ai_spin, drying, air_wash, cooling, wrinkle_prevent
+      selector: { text: {} }
+    keep_states:
+      name: '"Keep the current phase" states'
+      description: Short states that can come before either a delayed start or a real start (e.g. weighing the load). Separated by commas.
+      default: weight_sensing
+      selector: { text: {} }
+    finished_states:
+      name: '"Finished" states'
+      default: finish
+      selector: { text: {} }
+    stage_names:
+      name: Stage names
+      description: How each state is shown, as state=Name pairs separated by commas. Unlisted states are shown as they are.
+      default: pre_wash=Pre-wash, wash=Washing, ai_wash=Washing, rinse=Rinsing, ai_rinse=Rinsing, spin=Spinning, ai_spin=Spinning, drying=Drying, air_wash=Air wash, cooling=Cooling down, wrinkle_prevent=Anti-crease
+      selector: { text: {} }
+    completion_time:
+      name: Completion time sensor (optional)
+      description: A timestamp sensor with the expected end. Without it there is no countdown or progress bar.
+      default: []
+      selector: { entity: { domain: sensor, device_class: timestamp } }
+    pause_sensor:
+      name: Pause sensor (optional)
+      description: A sensor that shows the paused state (e.g. the washer's "Machine state").
+      default: []
+      selector: { entity: { domain: sensor } }
+    pause_state:
+      name: Its "paused" state
+      default: pause
+      selector: { text: {} }
+    waiting:
+      name: '"Laundry waiting" toggle (optional)'
+      description: The done card stays while this is on and closes when it turns off. Without it, the done card closes after the time below.
+      default: []
+      selector: { entity: { domain: input_boolean } }
+    done_for:
+      name: Without a toggle, close the done card after
+      default: { minutes: 30 }
+      selector: { duration: {} }
+    reminders:
+      name: Remind after (minutes, only with the toggle)
+      description: Re-alert while it's still waiting, separated by commas. Leave empty for no reminders.
+      default: "30, 90, 150"
+      selector: { text: {} }
+    phase_helper:
+      name: Phase helper (Text)
+      selector: { entity: { domain: input_text } }
+    name:
+      name: Appliance name
+      default: Washer
+      selector: { text: {} }
+    done_text:
+      name: Done message
+      default: time to hang it up
+      selector: { text: {} }
+    icon:
+      name: Icon
+      default: mdi:washing-machine
+      selector: { icon: {} }
+    color:
+      name: Colour
+      default: "#2196F3"
+      selector: { text: {} }
+    url:
+      name: Open when tapped (optional)
+      description: A dashboard path such as /lovelace/laundry.
+      default: ""
+      selector: { text: {} }
+    quiet_start:
+      name: Quiet from
+      description: Done alerts and reminders arrive silently between these times.
+      default: "23:00:00"
+      selector: { time: {} }
+    quiet_end:
+      name: Quiet until
+      default: "07:00:00"
+      selector: { time: {} }
+    notify_action:
+      name: Notification action
+      description: e.g. notify.mobile_app_your_phone, or a notify group to reach several phones.
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+max: 10
+
+variables:
+  job_entity: !input job_state
+  end_entity: !input completion_time
+  pause_entity: !input pause_sensor
+  pause_state: !input pause_state
+  waiting_entity: !input waiting
+  phase_entity: !input phase_helper
+  name: !input name
+  done_text: !input done_text
+  icon: !input icon
+  color: !input color
+  url: !input url
+  notify_action: !input notify_action
+  quiet_start: !input quiet_start
+  quiet_end: !input quiet_end
+  programmed_input: !input programmed_states
+  running_input: !input running_states
+  keep_input: !input keep_states
+  finished_input: !input finished_states
+  names_input: !input stage_names
+  reminders_input: !input reminders
+  programmed_list: "{{ programmed_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  running_list: "{{ running_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  keep_list: "{{ keep_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  finished_list: "{{ finished_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  reminder_list: "{{ reminders_input.split(',') | map('trim') | select('is_number') | map('int') | list }}"
+  names: >-
+    {% set ns = namespace(d={}) %}
+    {% for p in names_input.split(',') %}{% set kv = p.split('=') %}
+      {% if kv | count == 2 %}{% set ns.d = dict(ns.d, **{kv[0] | trim: kv[1] | trim}) %}{% endif %}
+    {% endfor %}{{ ns.d }}
+  job: "{{ states(job_entity) }}"
+  waiting_on: "{{ waiting_entity not in ['', none, []] and is_state(waiting_entity, 'on') }}"
+  prev: "{{ states(phase_entity) }}"
+  phase: >-
+    {% if trigger.id == 'close_maybe' and waiting_entity in ['', none, []] %}none
+    {% elif job in programmed_list %}programmed
+    {% elif job in keep_list %}{{ prev if prev in ['programmed', 'running'] else 'none' }}
+    {% elif job in running_list %}running
+    {% elif job in finished_list or waiting_on %}done
+    {% elif prev == 'done' and waiting_entity in ['', none, []] %}done
+    {% else %}none{% endif %}
+  tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
+  tags:
+    programmed: "{{ tag_base }}_programmed"
+    running: "{{ tag_base }}_running"
+    done: "{{ tag_base }}_done"
+  now_ts: "{{ now().timestamp() | int }}"
+  end_ts: "{{ (as_timestamp(states(end_entity), 0) | int) if end_entity not in ['', none, []] else 0 }}"
+  end_hm: "{{ (end_ts | timestamp_custom('%H:%M')) if end_ts > 0 else '' }}"
+  quiet: >-
+    {% set t = now().strftime('%H:%M:%S') %}
+    {{ (t >= quiet_start or t < quiet_end) if quiet_start > quiet_end else (quiet_start <= t < quiet_end) }}
+
+triggers:
+  - trigger: state
+    entity_id: !input job_state
+    not_to: [unavailable, unknown]
+  - trigger: state
+    entity_id: !input completion_time
+    not_to: [unavailable, unknown]
+  - trigger: state
+    entity_id: !input pause_sensor
+    not_to: [unavailable, unknown]
+  - trigger: state
+    entity_id: !input waiting
+    to: ["on", "off"]
+  - trigger: time_pattern
+    minutes: "/5"
+    id: tick
+  - trigger: state
+    entity_id: !input phase_helper
+    to: done
+    for: !input done_for
+    id: close_maybe
+
+conditions:
+  - alias: The 5-minute tick only matters while the done card is up (for reminders)
+    condition: template
+    value_template: "{{ trigger.id != 'tick' or prev == 'done' }}"
+
+actions:
+  - alias: Phase changed → close the previous Live Activity
+    if:
+      - condition: template
+        value_template: "{{ phase != prev and prev in tags }}"
+    then:
+      - action: "{{ notify_action }}"
+        continue_on_error: true
+        data:
+          message: clear_notification
+          data: { tag: "{{ tags[prev] }}" }
+  - choose:
+      - alias: Programmed / delayed start
+        conditions:
+          - condition: template
+            value_template: "{{ phase == 'programmed' and trigger.id != 'tick' }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "⏰ {{ name }} programmed"
+              message: "{{ ('Will finish at ' ~ end_hm) if end_ts > now_ts else 'Waiting to start' }}"
+              data:
+                tag: "{{ tags.programmed }}"
+                live_update: true
+                silent: true
+                critical_text: "{{ ('Ends ' ~ end_hm) if end_ts > now_ts else 'Later' }}"
+                notification_icon: mdi:timer-sand
+                notification_icon_color: "#FF9800"
+                url: "{{ url }}"
+      - alias: Running
+        conditions:
+          - condition: template
+            value_template: "{{ phase == 'running' and trigger.id != 'tick' }}"
+        sequence:
+          - variables:
+              start_ts: >-
+                {{ now_ts if prev != 'running' else (as_timestamp(states[phase_entity].last_changed) | int(now_ts)) }}
+              total: "{{ [end_ts - start_ts, 60] | max }}"
+              elapsed: "{{ [[now_ts - start_ts, 0] | max, total] | min }}"
+              left: "{{ [((end_ts - now_ts) / 60) | round(0) | int, 0] | max }}"
+              paused: "{{ pause_entity not in ['', none, []] and is_state(pause_entity, pause_state) }}"
+              stage: "{{ 'Paused' if paused else names.get(job, job | replace('_', ' ') | capitalize) }}"
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ name }} · {{ stage }}"
+              message: >-
+                {{ (left ~ ' min left · done around ' ~ end_hm) if end_ts > now_ts else 'Running' }}
+              data:
+                tag: "{{ tags.running }}"
+                live_update: true
+                silent: true
+                progress: "{{ elapsed if end_ts > now_ts else 0 }}"
+                progress_max: "{{ total if end_ts > now_ts else 0 }}"
+                chronometer: "{{ end_ts > now_ts }}"
+                when: "{{ end_ts }}"
+                critical_text: "{{ (left ~ ' min') if end_ts > now_ts else stage }}"
+                notification_icon: "{{ icon }}"
+                notification_icon_color: "{{ color }}"
+                progress_bar_color: "{{ color }}"
+                url: "{{ url }}"
+      - alias: Done (first time), or a reminder is due
+        conditions:
+          - condition: template
+            value_template: >-
+              {% set waited = ((now() - states[phase_entity].last_changed).total_seconds() / 60) | int if prev == 'done' else 0 %}
+              {{ phase == 'done' and (phase != prev
+                 or (trigger.id == 'tick' and waiting_on and reminder_list | select('le', waited) | select('gt', waited - 5) | list | count > 0)) }}
+        sequence:
+          - variables:
+              reminder: "{{ phase == prev }}"
+              since: "{{ as_local(states[phase_entity].last_changed).strftime('%H:%M') if reminder else now().strftime('%H:%M') }}"
+              waited: "{{ ((now() - states[phase_entity].last_changed).total_seconds() / 60) | int if reminder else 0 }}"
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ ('⏳ ' ~ name ~ ' still waiting') if reminder else ('✅ ' ~ name ~ ' done') }}"
+              message: >-
+                {% if reminder %}Done since {{ since }} ({{ (waited // 60 ~ ' h ') if waited >= 60 else '' }}{{ waited % 60 }} min) — {{ done_text }}{% else %}Finished at {{ since }} — {{ done_text }}{% endif %}
+              data:
+                tag: "{{ tags.done }}"
+                live_update: true
+                silent: "{{ quiet }}"
+                progress: 1
+                progress_max: 1
+                critical_text: Done
+                notification_icon: mdi:check-circle
+                notification_icon_color: "#4CAF50"
+                progress_bar_color: "#4CAF50"
+                url: "{{ url }}"
+  - alias: Remember the phase
+    if:
+      - condition: template
+        value_template: "{{ phase != prev }}"
+    then:
+      - action: input_text.set_value
+        target: { entity_id: "{{ phase_entity }}" }
+        data: { value: "{{ phase }}" }

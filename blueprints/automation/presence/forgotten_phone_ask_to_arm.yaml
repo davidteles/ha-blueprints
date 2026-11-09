@@ -1,0 +1,212 @@
+blueprint:
+  name: Forgotten phone — ask before arming the alarm
+  description: >-
+    "Arm when everyone has left" fails when someone forgets their phone at home:
+    the phone says they're still in. This blueprint notices it and **asks**,
+    it never arms by itself.
+
+
+    When someone leaves (or the front door closes) while another person's phone
+    still says *home*, it watches quietly. If, for the time you set, no motion
+    sensor sees anything, the phones at home don't move (step counters or any
+    activity sensor stay the same) and the alarm is still off, whoever is away
+    gets: "Alex's phone is at home, but nothing has moved for 15 min" with
+    **Arm the alarm** / **Someone's home**. If someone really is home, they just
+    ignore it.
+
+
+    A phone app reloading (its person goes *unknown* for a split second) is
+    ignored.
+
+
+    **The alarm must arm without a code** from Home Assistant for the button to
+    work (e.g. Alarmo: "Require code for arming" off for that mode).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/presence/forgotten_phone_ask_to_arm.yaml
+  input:
+    people:
+      name: People
+      selector: { entity: { domain: person, multiple: true } }
+    notify_map:
+      name: Who gets asked, and how
+      description: >-
+        One person=notify action pair per person, separated by commas, e.g.
+        person.alex=notify.mobile_app_alex_phone, person.sam=notify.mobile_app_sam_phone
+      selector: { text: { multiline: true } }
+    alarm:
+      name: Alarm
+      selector: { entity: { domain: alarm_control_panel } }
+    home_zone:
+      name: Home zone
+      default: zone.home
+      selector: { entity: { domain: zone } }
+    door:
+      name: Front door (optional)
+      description: When it closes, the check starts too (someone may have left without their phone).
+      default: []
+      selector: { entity: { domain: binary_sensor } }
+    motion:
+      name: Motion / presence sensors
+      description: Anything seen here means someone is home and the check stops.
+      default: []
+      selector: { entity: { domain: binary_sensor, multiple: true } }
+    activity:
+      name: Activity sensors on the phones (optional)
+      description: Step counters or similar. If they go up, someone is carrying the phone, so the check stops.
+      default: []
+      selector: { entity: { domain: sensor, multiple: true } }
+    extra_trackers:
+      name: Extra trackers mentioned in the question (optional)
+      description: E.g. watches. If one is away, the message says so, as extra evidence.
+      default: []
+      selector: { entity: { domain: device_tracker, multiple: true } }
+    quiet:
+      name: Ask after nothing has moved for
+      default: { minutes: 15 }
+      selector: { duration: {} }
+    arm_mode:
+      name: Arm mode for the button
+      default: alarm_arm_away
+      selector:
+        select:
+          options:
+            - { label: Away, value: alarm_arm_away }
+            - { label: Home, value: alarm_arm_home }
+            - { label: Night, value: alarm_arm_night }
+            - { label: Vacation, value: alarm_arm_vacation }
+
+mode: restart
+
+variables:
+  people: !input people
+  map_input: !input notify_map
+  alarm: !input alarm
+  motion: !input motion
+  activity: !input activity
+  extra_trackers: !input extra_trackers
+  arm_mode: !input arm_mode
+  quiet_input: !input quiet
+  quiet_min: >-
+    {% set q = quiet_input %}
+    {{ ((q.hours | default(0)) * 60 + (q.minutes | default(0)) + (q.seconds | default(0)) / 60) | round(0) | int }}
+  notify_of: >-
+    {% set ns = namespace(d={}) %}
+    {% for p in map_input.replace('\n', ',').split(',') %}{% set kv = p.split('=') %}
+      {% if kv | count == 2 %}{% set ns.d = dict(ns.d, **{kv[0] | trim: kv[1] | trim}) %}{% endif %}
+    {% endfor %}{{ ns.d }}
+  tag: forgotten-phone
+
+triggers:
+  - trigger: zone
+    entity_id: !input people
+    zone: !input home_zone
+    event: leave
+    id: watch
+  - trigger: state
+    entity_id: !input door
+    from: "on"
+    to: "off"
+    id: watch
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: FORGOTTEN_PHONE_ARM }
+    id: arm
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: FORGOTTEN_PHONE_HOME }
+    id: home
+
+conditions:
+  - alias: Ignore a phone app reloading (person briefly unknown / unavailable)
+    condition: template
+    value_template: >-
+      {% set bad = ['unknown', 'unavailable'] %}
+      {{ trigger.from_state is not defined or trigger.from_state is none or trigger.to_state is none
+         or (trigger.from_state.state not in bad and trigger.to_state.state not in bad) }}
+
+actions:
+  - choose:
+      - alias: Someone left or the door closed → watch for "nobody is really here"
+        conditions:
+          - condition: trigger
+            id: watch
+          - condition: template
+            value_template: "{{ is_state(alarm, 'disarmed') }}"
+          - alias: A phone still says home, and someone is away to ask
+            condition: template
+            value_template: >-
+              {{ people | select('is_state', 'home') | list | count > 0
+                 and people | reject('is_state', 'home') | select('in', notify_of.keys() | list) | list | count > 0 }}
+        sequence:
+          - variables:
+              home_start: "{{ people | select('is_state', 'home') | list }}"
+              activity_base: "{{ activity | map('states') | map('float', 0) | sum }}"
+          - alias: Anything that proves someone is home stops the check
+            wait_template: >-
+              {{ motion | select('is_state', 'on') | list | count > 0
+                 or not is_state(alarm, 'disarmed')
+                 or home_start | select('is_state', 'home') | list | count == 0
+                 or (activity | map('states') | map('float', 0) | sum) > activity_base | float + 15 }}
+            timeout: !input quiet
+            continue_on_timeout: true
+          - condition: template
+            value_template: "{{ not wait.completed and is_state(alarm, 'disarmed') }}"
+          - variables:
+              at_home: "{{ people | select('is_state', 'home') | list }}"
+              away: "{{ people | reject('is_state', 'home') | select('in', notify_of.keys() | list) | list }}"
+              names: "{{ at_home | map('state_attr', 'friendly_name') | list }}"
+              away_trackers: "{{ extra_trackers | reject('is_state', 'home') | map('state_attr', 'friendly_name') | list }}"
+          - condition: template
+            value_template: "{{ at_home | count > 0 and away | count > 0 }}"
+          - repeat:
+              for_each: "{{ away }}"
+              sequence:
+                - action: "{{ notify_of[repeat.item] }}"
+                  continue_on_error: true
+                  data:
+                    title: "🏠 Is the house empty?"
+                    message: |-
+                      {{ names | join(' and ') }}'s phone {{ 'is' if names | count == 1 else 'are' }} at home, but nothing has moved for {{ quiet_min }} min.{{ (' ' ~ away_trackers | join(', ') ~ ' ' ~ ('is' if away_trackers | count == 1 else 'are') ~ ' away.') if away_trackers else '' }} If someone is home, ignore this.
+                      👆 Press and hold for: Arm the alarm · Someone's home
+                    data:
+                      tag: "{{ tag }}"
+                      push: { interruption-level: time-sensitive }
+                      actions:
+                        - { action: FORGOTTEN_PHONE_ARM, title: Arm the alarm }
+                        - { action: FORGOTTEN_PHONE_HOME, title: Someone's home }
+      - alias: Arm the alarm (button)
+        conditions:
+          - condition: trigger
+            id: arm
+          - condition: template
+            value_template: "{{ is_state(alarm, 'disarmed') }}"
+        sequence:
+          - action: "alarm_control_panel.{{ arm_mode }}"
+            continue_on_error: true
+            target: { entity_id: "{{ alarm }}" }
+          - wait_template: "{{ not is_state(alarm, 'disarmed') }}"
+            timeout: { seconds: 20 }
+            continue_on_timeout: true
+          - repeat:
+              for_each: "{{ notify_of.values() | list | unique | list }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  continue_on_error: true
+                  data:
+                    title: "{{ '🔒 Alarm on' if not is_state(alarm, 'disarmed') else '🔓 The alarm did not turn on' }}"
+                    message: >-
+                      {% if not is_state(alarm, 'disarmed') %}Armed from the forgotten-phone question.{% else %}{% set os = state_attr(alarm, 'open_sensors') or {} %}{% set n = os.keys() | map('state_attr', 'friendly_name') | reject('none') | list %}{{ ('Open or offline: ' ~ n | join(', ') ~ '. ') if n else '' }}Arm it from Home Assistant.{% endif %}
+                    data: { tag: "{{ tag }}" }
+      - alias: Someone's home (button) → clear the question everywhere
+        conditions:
+          - condition: trigger
+            id: home
+        sequence:
+          - repeat:
+              for_each: "{{ notify_of.values() | list | unique | list }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  continue_on_error: true
+                  data:
+                    message: clear_notification
+                    data: { tag: "{{ tag }}" }
