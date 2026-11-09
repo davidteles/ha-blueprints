@@ -1,5 +1,5 @@
 blueprint:
-  name: Appliance Live Activity — programmed, running, done
+  name: Appliance Live Activity — ready, programmed, running, done
   description: >-
     **Needs an iPhone with Live Activities turned on** (iOS 17.2 or later, Home
     Assistant app 2026.x): on the iPhone, Settings → Home Assistant → Live
@@ -11,7 +11,9 @@ blueprint:
     a washer, dryer or dishwasher through its cycle:
 
 
-    **⏰ Programmed** (delayed start) with the expected finish time →
+    **🧺 Ready** while remote start is on, waiting for a programme or Start
+    (optional) → **⏰ programmed** (delayed start) with the expected finish
+    time →
     **running** with the stage, a progress bar, a countdown and "N min left ·
     done around 15:30" → **✅ done** until it's emptied, with reminders.
 
@@ -19,7 +21,8 @@ blueprint:
     Each phase is its own Live Activity, so a long delayed start can't hit the
     8-hour iOS limit, and the done card closes by itself: when a "laundry
     waiting" toggle turns off (e.g. from the *Laundry done* blueprint), or after
-    a set time if you don't use one.
+    a set time if you don't use one. The ready card closes as soon as remote
+    start or the power goes off before a cycle starts.
 
 
     **Create first:** a **Text helper** (max 20 characters) for this blueprint
@@ -54,6 +57,26 @@ blueprint:
       name: Stage names
       description: How each state is shown, as state=Name pairs separated by commas. Unlisted states are shown as they are.
       default: pre_wash=Pre-wash, wash=Washing, ai_wash=Washing, rinse=Rinsing, ai_rinse=Rinsing, spin=Spinning, ai_spin=Spinning, drying=Drying, air_wash=Air wash, cooling=Cooling down, wrinkle_prevent=Anti-crease
+      selector: { text: {} }
+    ready_sensor:
+      name: Ready / remote start sensor (optional)
+      description: >-
+        While this is on and nothing is programmed or running, a "ready" card
+        is shown (e.g. a Samsung washer's "Remote control" / Smart Control).
+        Leave empty to skip the ready phase.
+      default: []
+      selector: { entity: { domain: [binary_sensor, input_boolean, switch] } }
+    power_entity:
+      name: Power entity (optional)
+      description: >-
+        The appliance's on/off switch or sensor. When it goes off or
+        unavailable, the ready card closes even if the ready sensor is slow to
+        follow.
+      default: []
+      selector: { entity: {} }
+    ready_text:
+      name: Ready message
+      default: Waiting for a programme or Start
       selector: { text: {} }
     completion_time:
       name: Completion time sensor (optional)
@@ -127,6 +150,9 @@ max: 10
 
 variables:
   job_entity: !input job_state
+  ready_entity: !input ready_sensor
+  power_ent: !input power_entity
+  ready_text: !input ready_text
   end_entity: !input completion_time
   pause_entity: !input pause_sensor
   pause_state: !input pause_state
@@ -159,16 +185,21 @@ variables:
   job: "{{ states(job_entity) }}"
   waiting_on: "{{ waiting_entity not in ['', none, []] and is_state(waiting_entity, 'on') }}"
   prev: "{{ states(phase_entity) }}"
+  ready_on: >-
+    {{ ready_entity not in ['', none, []] and is_state(ready_entity, 'on')
+       and (power_ent in ['', none, []] or states(power_ent) not in ['off', 'unavailable', 'unknown']) }}
   phase: >-
     {% if trigger.id == 'close_maybe' and waiting_entity in ['', none, []] %}none
     {% elif job in programmed_list %}programmed
-    {% elif job in keep_list %}{{ prev if prev in ['programmed', 'running'] else 'none' }}
+    {% elif job in keep_list %}{{ prev if prev in ['programmed', 'running'] else ('ready' if ready_on else 'none') }}
     {% elif job in running_list %}running
     {% elif job in finished_list or waiting_on %}done
     {% elif prev == 'done' and waiting_entity in ['', none, []] %}done
+    {% elif ready_on %}ready
     {% else %}none{% endif %}
   tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
   tags:
+    ready: "{{ tag_base }}_ready"
     programmed: "{{ tag_base }}_programmed"
     running: "{{ tag_base }}_running"
     done: "{{ tag_base }}_done"
@@ -183,6 +214,14 @@ triggers:
   - trigger: state
     entity_id: !input job_state
     not_to: [unavailable, unknown]
+  - trigger: state
+    entity_id: !input ready_sensor
+    to: ["on", "off", unavailable]
+    not_from: [unknown]
+  - trigger: state
+    entity_id: !input power_entity
+    to: ~
+    not_from: [unknown]
   - trigger: state
     entity_id: !input completion_time
     not_to: [unavailable, unknown]
@@ -218,6 +257,23 @@ actions:
           message: clear_notification
           data: { tag: "{{ tags[prev] }}" }
   - choose:
+      - alias: Ready (remote start on, waiting for a programme or Start)
+        conditions:
+          - condition: template
+            value_template: "{{ phase == 'ready' and prev != 'ready' }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "🧺 {{ name }} ready"
+              message: "{{ ready_text }}"
+              data:
+                tag: "{{ tags.ready }}"
+                live_update: true
+                silent: true
+                critical_text: Ready
+                notification_icon: "{{ icon }}"
+                notification_icon_color: "#9E9E9E"
+                url: "{{ url }}"
       - alias: Programmed / delayed start
         conditions:
           - condition: template
