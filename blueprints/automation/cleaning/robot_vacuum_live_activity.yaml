@@ -104,7 +104,9 @@ variables:
   expected: "{{ memory.get(key, 0) | int(0) }}"
   phase: >-
     {% if trigger.id == 'close' %}none
-    {% elif vac in ['cleaning', 'returning', 'paused', 'error'] %}cleaning
+    {#- An error only counts during a clean: lifting the robot off its dock to
+        clean it reports "error" for a few seconds, which must not look like a job. #}
+    {% elif vac in ['cleaning', 'returning', 'paused'] or (vac == 'error' and prev == 'cleaning') %}cleaning
     {% elif prev in ['cleaning', 'done'] and vac in ['docked', 'idle'] %}done
     {% else %}none{% endif %}
   tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
