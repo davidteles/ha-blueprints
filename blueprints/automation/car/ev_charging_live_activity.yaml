@@ -1,0 +1,206 @@
+blueprint:
+  name: EV charging Live Activity — plugged in, charging, charged
+  description: >-
+    **Needs an iPhone with Live Activities turned on** (iOS 17.2 or later, Home
+    Assistant app 2026.x): on the iPhone, Settings → Home Assistant → Live
+    Activities, and in the Home Assistant app, Settings → Live Activities
+    (accept the one-time notice). Without that, nothing is shown.
+
+
+    A Live Activity on the iPhone's lock screen and Dynamic Island for your
+    electric car:
+
+
+    **🔌 Plugged in** — "Waiting to charge · 63% → 80%" →
+    **⚡ Charging** — "63% → 80% · 7.4 kW · 300 km", with the battery as a
+    progress bar towards the charge limit → **✅ Charged** (alerts once,
+    silently at night). Everything closes by itself when the cable is unplugged.
+    If charging stops before the limit, it goes back to "plugged in".
+
+
+    Each phase is its own Live Activity, so a long wait for cheap hours can't hit
+    the 8-hour iOS limit. Works with any car integration that has a charging
+    state and a battery level.
+
+
+    **Create first:** a **Text helper** (max 20 characters) for this blueprint
+    to remember the phase, e.g. "Car live phase".
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_charging_live_activity.yaml
+  input:
+    charging_state:
+      name: Charging state
+      description: A sensor (or binary sensor) that says whether the car is charging.
+      selector: { entity: { domain: [sensor, binary_sensor] } }
+    charging_values:
+      name: '"Charging" values'
+      description: Value(s) of that entity meaning "charging now", separated by commas.
+      default: charging, on
+      selector: { text: {} }
+    plugged_values:
+      name: '"Plugged in but not charging" values'
+      description: Used when you have no plug sensor below. Separated by commas.
+      default: ready_for_charging, conserving, charging_interrupted, connected, plugged_in, paused, complete
+      selector: { text: {} }
+    plug:
+      name: Cable connected sensor (optional, recommended)
+      default: []
+      selector: { entity: { domain: binary_sensor } }
+    battery:
+      name: Battery level
+      selector: { entity: { domain: sensor, device_class: battery } }
+    limit:
+      name: Charge limit (optional)
+      description: A sensor or number with the target %. Without it, 100 % is used.
+      default: []
+      selector: { entity: { domain: [sensor, number] } }
+    power:
+      name: Charging power, kW (optional)
+      description: From the car or the wall charger.
+      default: []
+      selector: { entity: { domain: sensor } }
+    range:
+      name: Range (optional)
+      default: []
+      selector: { entity: { domain: sensor } }
+    phase_helper:
+      name: Phase helper (Text)
+      selector: { entity: { domain: input_text } }
+    name:
+      name: Car name
+      default: Car
+      selector: { text: {} }
+    url:
+      name: Open when tapped (optional)
+      description: A dashboard path such as /lovelace/car.
+      default: ""
+      selector: { text: {} }
+    quiet_start:
+      name: Quiet from
+      description: The "charged" alert arrives silently between these times.
+      default: "23:00:00"
+      selector: { time: {} }
+    quiet_end:
+      name: Quiet until
+      default: "08:00:00"
+      selector: { time: {} }
+    notify_action:
+      name: Notification action
+      description: e.g. notify.mobile_app_your_phone.
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+max: 10
+
+variables:
+  state_entity: !input charging_state
+  plug_entity: !input plug
+  battery_entity: !input battery
+  limit_entity: !input limit
+  power_entity: !input power
+  range_entity: !input range
+  phase_entity: !input phase_helper
+  name: !input name
+  url: !input url
+  notify_action: !input notify_action
+  quiet_start: !input quiet_start
+  quiet_end: !input quiet_end
+  charging_input: !input charging_values
+  plugged_input: !input plugged_values
+  charging_list: "{{ charging_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  plugged_list: "{{ plugged_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  cs: "{{ states(state_entity) | lower }}"
+  charging: "{{ cs in charging_list }}"
+  plugged: >-
+    {% set b = states(plug_entity) if plug_entity not in ['', none, []] else 'none' %}
+    {{ charging or (b == 'on' if b in ['on', 'off'] else cs in plugged_list) }}
+  soc: "{{ states(battery_entity) | float(0) | round(0) | int }}"
+  target: "{{ (states(limit_entity) | float(100) | round(0) | int) if limit_entity not in ['', none, []] else 100 }}"
+  kw: "{{ (states(power_entity) | float(0) | round(1)) if power_entity not in ['', none, []] else 0 }}"
+  km: "{{ (states(range_entity) | float(0) | round(0) | int) if range_entity not in ['', none, []] else 0 }}"
+  km_unit: "{{ (state_attr(range_entity, 'unit_of_measurement') or 'km') if range_entity not in ['', none, []] else '' }}"
+  prev: "{{ states(phase_entity) }}"
+  phase: >-
+    {% if not plugged %}none
+    {% elif charging %}charging
+    {% elif prev in ['charging', 'charged'] and soc >= target - 1 %}charged
+    {% else %}waiting{% endif %}
+  tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
+  tags:
+    waiting: "{{ tag_base }}_plugged"
+    charging: "{{ tag_base }}_charging"
+    charged: "{{ tag_base }}_charged"
+  quiet: >-
+    {% set t = now().strftime('%H:%M:%S') %}
+    {{ (t >= quiet_start or t < quiet_end) if quiet_start > quiet_end else (quiet_start <= t < quiet_end) }}
+
+triggers:
+  - trigger: state
+    entity_id: !input charging_state
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
+  - alias: Cable plugged / unplugged (1 min, so short 'unknown' flaps are ignored)
+    trigger: state
+    entity_id: !input plug
+    to: ["on", "off"]
+    not_from: [unknown, unavailable]
+    for: { minutes: 1 }
+  - trigger: state
+    entity_id: !input battery
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
+  - trigger: state
+    entity_id: !input limit
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
+  - trigger: state
+    entity_id: !input power
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
+
+actions:
+  - alias: Phase changed → close the previous Live Activity
+    if:
+      - condition: template
+        value_template: "{{ phase != prev and prev in tags }}"
+    then:
+      - action: "{{ notify_action }}"
+        continue_on_error: true
+        data:
+          message: clear_notification
+          data: { tag: "{{ tags[prev] }}" }
+  - alias: Show the current phase
+    if:
+      - condition: template
+        value_template: "{{ phase in tags }}"
+    then:
+      - variables:
+          range_text: "{{ (' · ' ~ km ~ ' ' ~ km_unit) if km > 0 else '' }}"
+      - action: "{{ notify_action }}"
+        data:
+          title: >-
+            {{ {'waiting': '🔌 ' ~ name ~ ' plugged in', 'charging': '⚡ ' ~ name ~ ' charging', 'charged': '✅ ' ~ name ~ ' charged'}[phase] }}
+          message: >-
+            {% if phase == 'waiting' %}{{ ('Already at ' ~ soc ~ '%') if soc >= target - 1 else ('Waiting to charge · ' ~ soc ~ '% → ' ~ target ~ '%') }}{{ range_text }}
+            {%- elif phase == 'charging' %}{{ soc }}% → {{ target }}%{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ range_text }}
+            {%- else %}{{ soc }}%{{ range_text }} · unplug when you go{% endif %}
+          data:
+            tag: "{{ tags[phase] }}"
+            live_update: true
+            silent: "{{ phase != 'charged' or phase == prev or quiet }}"
+            progress: "{{ soc }}"
+            progress_max: "{{ [target, soc, 1] | max }}"
+            critical_text: "{{ soc }}%"
+            notification_icon: "{{ 'mdi:ev-plug-type2' if phase == 'waiting' else 'mdi:car-electric' }}"
+            notification_icon_color: "{{ '#FF9800' if phase == 'waiting' else '#4CAF50' }}"
+            progress_bar_color: "{{ '#FF9800' if phase == 'waiting' else '#4CAF50' }}"
+            url: "{{ url }}"
+  - alias: Remember the phase
+    if:
+      - condition: template
+        value_template: "{{ phase != prev }}"
+    then:
+      - action: input_text.set_value
+        target: { entity_id: "{{ phase_entity }}" }
+        data: { value: "{{ phase }}" }

@@ -1,0 +1,111 @@
+blueprint:
+  name: Pause heavy apps while a backup runs
+  description: >-
+    Stops the apps (add-ons) you choose a few minutes before Home Assistant's
+    scheduled automatic backup, and whenever any backup starts, then starts
+    them again when the backup has finished. Useful for apps that hold a lot of
+    memory (a speech-to-text model, a media server, a camera NVR) on a small
+    machine, so the backup has room to run.
+
+
+    **Safety nets:** the apps are started again after at most the time you set,
+    even if the backup never finishes, and every time Home Assistant starts
+    (unless a backup is running).
+
+
+    Only list apps that should always be running: they are started again
+    afterwards whether or not they were running before.
+
+
+    **Needs:** Home Assistant OS or Supervised, and the Backup integration's
+    sensors (they are there by default).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/system/pause_apps_during_backups.yaml
+  input:
+    apps:
+      name: Apps to pause
+      description: The apps' slugs, separated by commas, e.g. core_whisper. You find a slug in the app's page address (Settings → Apps → the app).
+      selector: { text: {} }
+    minutes_before:
+      name: Stop them this long before the scheduled backup
+      description: As -HH:MM:SS (keep the minus sign), e.g. -00:05:00 for 5 minutes before.
+      default: "-00:05:00"
+      selector: { text: {} }
+    max_wait:
+      name: Start them again after at most
+      default: { hours: 2 }
+      selector: { duration: {} }
+    next_backup:
+      name: Next scheduled automatic backup sensor
+      default: sensor.backup_next_scheduled_automatic_backup
+      selector: { entity: { domain: sensor, integration: backup } }
+    manager_state:
+      name: Backup manager state sensor
+      default: sensor.backup_backup_manager_state
+      selector: { entity: { domain: sensor, integration: backup } }
+
+mode: single
+max_exceeded: silent
+
+variables:
+  apps_input: !input apps
+  apps: "{{ apps_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  manager: !input manager_state
+  max_wait: !input max_wait
+
+triggers:
+  - trigger: time
+    at:
+      entity_id: !input next_backup
+      offset: !input minutes_before
+    id: before
+  - trigger: state
+    entity_id: !input manager_state
+    to: create_backup
+    id: before
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+
+actions:
+  - choose:
+      - alias: Backup coming (or started) → stop, wait for it to finish, start again
+        conditions:
+          - condition: trigger
+            id: before
+        sequence:
+          - repeat:
+              for_each: "{{ apps }}"
+              sequence:
+                - action: hassio.app_stop
+                  continue_on_error: true
+                  data: { app: "{{ repeat.item }}" }
+          - alias: Wait for the backup to start (if it hasn't already)
+            wait_template: "{{ is_state(manager, 'create_backup') }}"
+            timeout: { minutes: 30 }
+            continue_on_timeout: true
+          - alias: Wait for it to finish
+            wait_template: "{{ not is_state(manager, 'create_backup') }}"
+            timeout: "{{ max_wait }}"
+            continue_on_timeout: true
+          - delay: { minutes: 1 }
+          - repeat:
+              for_each: "{{ apps }}"
+              sequence:
+                - action: hassio.app_start
+                  continue_on_error: true
+                  data: { app: "{{ repeat.item }}" }
+      - alias: Home Assistant started → make sure they run (unless a backup is running)
+        conditions:
+          - condition: trigger
+            id: ha_start
+          - condition: template
+            value_template: "{{ not is_state(manager, 'create_backup') }}"
+        sequence:
+          - delay: { minutes: 2 }
+          - repeat:
+              for_each: "{{ apps }}"
+              sequence:
+                - action: hassio.app_start
+                  continue_on_error: true
+                  data: { app: "{{ repeat.item }}" }

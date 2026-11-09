@@ -1,0 +1,214 @@
+blueprint:
+  name: Robot vacuum Live Activity — cleaning, then finished
+  description: >-
+    **Needs an iPhone with Live Activities turned on** (iOS 17.2 or later, Home
+    Assistant app 2026.x): on the iPhone, Settings → Home Assistant → Live
+    Activities, and in the Home Assistant app, Settings → Live Activities
+    (accept the one-time notice). Without that, nothing is shown.
+
+
+    A Live Activity on the iPhone's lock screen and Dynamic Island while the
+    robot vacuum works: **🧹 cleaning / 🏠 heading home / ⏸ paused / ⚠️ needs
+    help**, with m² cleaned, minutes and battery → **✅ finished** ("14 m² in 12
+    min · 🔋 95%"), which closes by itself after a while.
+
+
+    **It learns:** most robots don't say how big the job is. Give it a Text
+    helper (max 255) and it remembers the area of each kind of clean, then shows
+    a progress bar and "~7 min left" the next time. If something names the job
+    (a Text helper with the rooms you picked, say), different jobs are learned
+    separately.
+
+
+    **Create first:** a **Text helper** (max 20 characters) for the phase, e.g.
+    "Vacuum live phase", and optionally one with max 255 for the learning.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/cleaning/robot_vacuum_live_activity.yaml
+  input:
+    vacuum:
+      name: Robot vacuum
+      selector: { entity: { domain: vacuum } }
+    area:
+      name: Area cleaned sensor (optional)
+      description: The current job's area (m²). Without it, only the state and minutes are shown.
+      default: []
+      selector: { entity: { domain: sensor } }
+    duration:
+      name: Cleaning time sensor (optional)
+      description: The current job's duration in minutes. Without it, the time since the start is used.
+      default: []
+      selector: { entity: { domain: sensor } }
+    battery:
+      name: Battery sensor (optional)
+      description: Without it, the vacuum's battery_level attribute is used, if it has one.
+      default: []
+      selector: { entity: { domain: sensor } }
+    learned:
+      name: Learning helper (optional, Text, max 255)
+      default: []
+      selector: { entity: { domain: input_text } }
+    job_name:
+      name: Job name (optional)
+      description: An entity whose state names the current job, e.g. a Text helper with the rooms you sent it to.
+      default: []
+      selector: { entity: {} }
+    phase_helper:
+      name: Phase helper (Text)
+      selector: { entity: { domain: input_text } }
+    done_for:
+      name: Close the "finished" card after
+      default: { minutes: 30 }
+      selector: { duration: {} }
+    name:
+      name: Robot name
+      default: Robot
+      selector: { text: {} }
+    url:
+      name: Open when tapped (optional)
+      default: ""
+      selector: { text: {} }
+    notify_action:
+      name: Notification action
+      description: e.g. notify.mobile_app_your_phone, or a notify group to reach several phones.
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+max: 10
+
+variables:
+  vac_entity: !input vacuum
+  area_entity: !input area
+  duration_entity: !input duration
+  battery_entity: !input battery
+  learned_entity: !input learned
+  job_entity: !input job_name
+  phase_entity: !input phase_helper
+  name: !input name
+  url: !input url
+  notify_action: !input notify_action
+  has_area: "{{ area_entity not in ['', none, []] }}"
+  vac: "{{ states(vac_entity) }}"
+  area: "{{ (states(area_entity) | float(0) | round(0) | int) if has_area else 0 }}"
+  prev: "{{ states(phase_entity) }}"
+  mins: >-
+    {% if duration_entity not in ['', none, []] %}{{ states(duration_entity) | float(0) }}
+    {% elif prev == 'cleaning' %}{{ ((now() - states[phase_entity].last_changed).total_seconds() / 60) | round(1) }}
+    {% else %}0{% endif %}
+  batt: >-
+    {{ (states(battery_entity) | float(0) | round(0) | int) if battery_entity not in ['', none, []]
+       else (state_attr(vac_entity, 'battery_level') | int(-1)) }}
+  job: "{{ states(job_entity) if job_entity not in ['', none, []] and has_value(job_entity) else '' }}"
+  key: "{{ (job or 'default')[:40] }}"
+  memory: "{{ (states(learned_entity) | from_json({})) if learned_entity not in ['', none, []] else {} }}"
+  expected: "{{ memory.get(key, 0) | int(0) }}"
+  phase: >-
+    {% if trigger.id == 'close' %}none
+    {% elif vac in ['cleaning', 'returning', 'paused', 'error'] %}cleaning
+    {% elif prev in ['cleaning', 'done'] and vac in ['docked', 'idle'] %}done
+    {% else %}none{% endif %}
+  tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
+  tags:
+    cleaning: "{{ tag_base }}_cleaning"
+    done: "{{ tag_base }}_done"
+
+triggers:
+  - trigger: state
+    entity_id: !input vacuum
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
+    id: state
+  - trigger: state
+    entity_id: !input area
+    not_to: [unknown, unavailable]
+    id: area
+  - trigger: state
+    entity_id: !input phase_helper
+    to: done
+    for: !input done_for
+    id: close
+
+actions:
+  - alias: Phase changed → close the previous Live Activity
+    if:
+      - condition: template
+        value_template: "{{ phase != prev and prev in tags }}"
+    then:
+      - action: "{{ notify_action }}"
+        continue_on_error: true
+        data:
+          message: clear_notification
+          data: { tag: "{{ tags[prev] }}" }
+  - choose:
+      - alias: Cleaning → start or update (on state changes, and every 2 m²)
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ phase == 'cleaning' and (trigger.id == 'state' or prev != 'cleaning'
+                 or (trigger.id == 'area' and vac == 'cleaning' and area % 2 == 0
+                     and trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state)) }}
+        sequence:
+          - variables:
+              rate: "{{ (mins | float(0) / area) if area >= 3 else 1.0 }}"
+              left: >-
+                {{ ([((expected - area) * rate) | round(0) | int, 0] | max) if expected > 0 and has_area and vac == 'cleaning' else 0 }}
+              end_ts: "{{ (now().timestamp() + left * 60) | int if left > 0 else 0 }}"
+              head: >-
+                {{ {'cleaning': '🧹 ' ~ name ~ ' is cleaning', 'returning': '🏠 ' ~ name ~ ' is heading home',
+                    'paused': '⏸ ' ~ name ~ ' is paused', 'error': '⚠️ ' ~ name ~ ' needs help'}[vac] }}
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ head }}"
+              message: >-
+                {{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² · ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}{{ (' · ~' ~ left ~ ' min left') if left > 0 else '' }}
+              data:
+                tag: "{{ tags.cleaning }}"
+                live_update: true
+                silent: true
+                progress: "{{ area if expected > 0 else 0 }}"
+                progress_max: "{{ ([expected, area + 1] | max) if expected > 0 else 0 }}"
+                chronometer: "{{ end_ts > 0 }}"
+                when: "{{ end_ts }}"
+                critical_text: "{{ (area ~ ' m²') if has_area else (mins | float(0) | round(0) | int ~ ' min') }}"
+                notification_icon: mdi:robot-vacuum
+                notification_icon_color: "{{ '#F44336' if vac == 'error' else '#9C27B0' }}"
+                progress_bar_color: "#9C27B0"
+                url: "{{ url }}"
+      - alias: Just finished → learn the area, show "finished"
+        conditions:
+          - condition: template
+            value_template: "{{ phase == 'done' and prev != 'done' }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ learned_entity not in ['', none, []] and has_area and area >= 3 }}"
+            then:
+              - action: input_text.set_value
+                target: { entity_id: "{{ learned_entity }}" }
+                data:
+                  value: >-
+                    {% set n = dict(memory, **{key: area}) %}{% set j = n | to_json %}{{ j if j | count <= 255 else ({key: area} | to_json) }}
+          - action: "{{ notify_action }}"
+            data:
+              title: "✅ {{ name }} finished"
+              message: >-
+                {{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² in ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}
+              data:
+                tag: "{{ tags.done }}"
+                live_update: true
+                silent: true
+                progress: 1
+                progress_max: 1
+                critical_text: "{{ (area ~ ' m²') if has_area else 'Done' }}"
+                notification_icon: mdi:robot-vacuum
+                notification_icon_color: "#4CAF50"
+                progress_bar_color: "#4CAF50"
+                url: "{{ url }}"
+  - alias: Remember the phase
+    if:
+      - condition: template
+        value_template: "{{ phase != prev }}"
+    then:
+      - action: input_text.set_value
+        target: { entity_id: "{{ phase_entity }}" }
+        data: { value: "{{ phase }}" }
