@@ -39,6 +39,8 @@ triggers:
   - trigger: state
     entity_id: !input people
     to: home
+    # Ignore a phone app reload (person briefly 'unknown', then 'home' again).
+    not_from: [unknown, unavailable]
     id: arrived
   - trigger: event
     event_type: timer.finished
