@@ -165,7 +165,7 @@ actions:
                   continue_on_error: true
                   data:
                     title: "🏠 Is the house empty?"
-                    message: >-
+                    message: |-
                       {{ names | join(' and ') }}'s phone {{ 'is' if names | count == 1 else 'are' }} at home, but nothing has moved for {{ quiet_min }} min.{{ (' ' ~ away_trackers | join(', ') ~ ' ' ~ ('is' if away_trackers | count == 1 else 'are') ~ ' away.') if away_trackers else '' }} If someone is home, ignore this.
                       👆 Press and hold for: Arm the alarm · Someone's home
                     data:
