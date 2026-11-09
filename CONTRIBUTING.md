@@ -3,7 +3,7 @@
 ## Branching strategy (GitHub flow)
 
 - **`main` is protected and always releasable.** Nothing is pushed to it directly. Every change arrives as a pull request.
-  While the repository is private this is a convention (GitHub's free plan has no branch protection for private repositories). When it goes public, a ruleset enforces it: no direct pushes, no force-pushes or deletion, and pull requests need the code owner's approval.
+  A ruleset enforces it: no direct pushes, no force-pushes or deletion, and pull requests need the code owner's approval.
 - Work happens on short-lived branches, named by type:
 
   | Prefix | For |
@@ -12,7 +12,6 @@
   | `fix/…` | Bug fixes |
   | `docs/…` | Documentation only |
   | `chore/…` | Tooling, CI, housekeeping |
-  | `export/…` | Configuration snapshots (private config repo) |
 
 - **Pull requests:**
   - Must pass the checks.
@@ -30,3 +29,7 @@ Imperative and short ("Add water tank sensor"), with a body explaining *why* whe
 ## Privacy
 
 No personal data, keys, tokens, codes or private hostnames, ever. Screenshots are people-free, with maps and balances blurred.
+
+## Checks
+
+`python tools/check_blueprints.py` (needs `pyyaml`) runs on every pull request: each blueprint must be valid YAML, have a name, description and `source_url` pointing at its own file, and declare every `!input` it uses. Test new blueprints in Home Assistant too, and say how in the pull request.
