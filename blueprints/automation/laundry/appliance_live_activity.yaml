@@ -19,9 +19,11 @@ blueprint:
 
 
     Each phase is its own Live Activity, so a long delayed start can't hit the
-    8-hour iOS limit, and the done card closes by itself: when a "laundry
-    waiting" toggle turns off (e.g. from the *Laundry done* blueprint), or after
-    a set time if you don't use one. The ready card closes as soon as remote
+    8-hour iOS limit. The done card closes on every phone when you say the
+    machine was emptied: an optional **"emptied" button** (e.g. a *Hung it up*
+    button on a wall panel), or a "laundry waiting" toggle turning off (e.g.
+    from the *Laundry done* blueprint). With neither, it closes after a set
+    time. The ready card closes as soon as remote
     start or the power goes off before a cycle starts.
 
 
@@ -92,9 +94,17 @@ blueprint:
       name: Its "paused" state
       default: pause
       selector: { text: {} }
+    emptied_button:
+      name: '"Emptied" button (optional)'
+      description: >-
+        Pressing it closes the done card on every phone (and turns off the
+        toggle below, if you use one). E.g. a Button helper shown as a
+        "Hung it up" button on a dashboard.
+      default: []
+      selector: { entity: { domain: [input_button, button] } }
     waiting:
       name: '"Laundry waiting" toggle (optional)'
-      description: The done card stays while this is on and closes when it turns off. Without it, the done card closes after the time below.
+      description: The done card stays while this is on and closes when it turns off. Without it (or the button above), the done card closes after the time below.
       default: []
       selector: { entity: { domain: input_boolean } }
     done_for:
@@ -157,6 +167,7 @@ variables:
   pause_entity: !input pause_sensor
   pause_state: !input pause_state
   waiting_entity: !input waiting
+  emptied_entity: !input emptied_button
   phase_entity: !input phase_helper
   name: !input name
   done_text: !input done_text
@@ -189,11 +200,15 @@ variables:
     {{ ready_entity not in ['', none, []] and is_state(ready_entity, 'on')
        and (power_ent in ['', none, []] or states(power_ent) not in ['off', 'unavailable', 'unknown']) }}
   phase: >-
-    {% if trigger.id == 'close_maybe' and waiting_entity in ['', none, []] %}none
+    {% if trigger.id == 'emptied' and prev == 'done' %}{{ 'ready' if ready_on else 'none' }}
+    {% elif trigger.id == 'close_maybe' and waiting_entity in ['', none, []] %}none
     {% elif job in programmed_list %}programmed
     {% elif job in keep_list %}{{ prev if prev in ['programmed', 'running'] else ('ready' if ready_on else 'none') }}
     {% elif job in running_list %}running
-    {% elif job in finished_list or waiting_on %}done
+    {#- "Finished" only starts the done card. Many machines keep reporting it
+        for hours, so it must not hold the card once the toggle is turned off. #}
+    {% elif job in finished_list and prev in ['programmed', 'running'] %}done
+    {% elif waiting_on %}done
     {% elif prev == 'done' and waiting_entity in ['', none, []] %}done
     {% elif ready_on %}ready
     {% else %}none{% endif %}
@@ -231,6 +246,12 @@ triggers:
   - trigger: state
     entity_id: !input waiting
     to: ["on", "off"]
+  - trigger: state
+    entity_id: !input emptied_button
+    # Not "unknown": a button that was never pressed starts there.
+    not_from: [unavailable]
+    not_to: [unavailable, unknown]
+    id: emptied
   - trigger: time_pattern
     minutes: "/5"
     id: tick
@@ -350,6 +371,13 @@ actions:
                 notification_icon_color: "#4CAF50"
                 progress_bar_color: "#4CAF50"
                 url: "{{ url }}"
+  - alias: Emptied → also turn off the "laundry waiting" toggle
+    if:
+      - condition: template
+        value_template: "{{ trigger.id == 'emptied' and prev == 'done' and waiting_on }}"
+    then:
+      - action: input_boolean.turn_off
+        target: { entity_id: "{{ waiting_entity }}" }
   - alias: Remember the phase
     if:
       - condition: template
