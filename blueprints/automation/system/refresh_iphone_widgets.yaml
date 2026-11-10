@@ -1,0 +1,64 @@
+blueprint:
+  name: Refresh iPhone widgets when something changes
+  description: >-
+    iOS refreshes Home Assistant widgets every 15 minutes at best. This sends
+    the app's silent **update_widgets** command when any entity you pick
+    changes, so a widget (e.g. a car widget with battery, range and charging
+    status) shows the new values straight away.
+
+
+    iOS allows only about 40–70 widget reloads a day, so it waits between
+    refreshes (5 minutes by default) and skips the changes in between; the
+    next refresh shows the latest values anyway.
+
+
+    Needs the Home Assistant app on iOS 17 or later, with a widget on the Home
+    Screen or Lock Screen. See docs/iphone-widgets.md for building one.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/system/refresh_iphone_widgets.yaml
+  input:
+    entities:
+      name: Entities shown in the widget
+      selector: { entity: { multiple: true } }
+    notify_actions:
+      name: Phones
+      description: Notification actions of the iPhones to refresh, separated by commas, e.g. notify.mobile_app_your_phone.
+      default: notify.mobile_app_your_phone
+      selector: { text: {} }
+    gap:
+      name: At most one refresh every
+      default: { minutes: 5 }
+      selector: { duration: {} }
+
+mode: single
+max_exceeded: silent
+
+variables:
+  gap_input: !input gap
+  gap_seconds: >-
+    {% set g = gap_input %}
+    {{ (g.days | default(0)) * 86400 + (g.hours | default(0)) * 3600 + (g.minutes | default(0)) * 60 + (g.seconds | default(0)) }}
+  phones_input: !input notify_actions
+  phones: "{{ phones_input.split(',') | map('trim') | select('match', '^[a-z_]+\\.[a-z0-9_]+$') | list }}"
+
+triggers:
+  - trigger: state
+    entity_id: !input entities
+    not_from: [unknown, unavailable]
+    not_to: [unknown, unavailable]
+
+conditions:
+  - alias: At most one refresh per gap (iOS allows ~40–70 reloads a day)
+    condition: template
+    value_template: >-
+      {% set last = this.attributes.last_triggered %}
+      {{ last is none or (now() - last).total_seconds() >= gap_seconds | float(300) }}
+
+actions:
+  - repeat:
+      for_each: "{{ phones }}"
+      sequence:
+        - action: "{{ repeat.item }}"
+          continue_on_error: true
+          data:
+            message: update_widgets

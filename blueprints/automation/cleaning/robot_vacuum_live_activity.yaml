@@ -13,6 +13,15 @@ blueprint:
     min · 🔋 95%"), which closes by itself after a while.
 
 
+    **⚠️ Stuck?** The "needs help" card can say what's wrong (from an error
+    text entity), and if the robot stays cleaning, paused, heading home or
+    stuck for an hour without any change, the card closes by itself so it
+    doesn't sit on the lock screen for hours. Keep your normal error alerts
+    for that case. Live Activities can't have buttons; for *pause / continue*,
+    tap the card to open a dashboard, or use the *Robot vacuum: pause or
+    continue* script blueprint in a widget.
+
+
     **It learns:** most robots don't say how big the job is. Give it a Text
     helper (max 255) and it remembers the area of each kind of clean, then shows
     a progress bar and "~7 min left" the next time. If something names the job
@@ -52,6 +61,19 @@ blueprint:
       description: An entity whose state names the current job, e.g. a Text helper with the rooms you sent it to.
       default: []
       selector: { entity: {} }
+    error_text:
+      name: Error text (optional)
+      description: >-
+        An entity whose state describes the problem (e.g. a Text helper your
+        error alert fills in, or the robot's error sensor). Shown on the
+        "needs help" card.
+      default: []
+      selector: { entity: { domain: [sensor, input_text] } }
+    stuck_after:
+      name: Close the card if nothing changes for
+      description: The robot stays cleaning, paused, heading home or stuck this long.
+      default: { minutes: 60 }
+      selector: { duration: {} }
     phase_helper:
       name: Phase helper (Text)
       selector: { entity: { domain: input_text } }
@@ -83,6 +105,7 @@ variables:
   battery_entity: !input battery
   learned_entity: !input learned
   job_entity: !input job_name
+  error_entity: !input error_text
   phase_entity: !input phase_helper
   name: !input name
   url: !input url
@@ -102,8 +125,15 @@ variables:
   key: "{{ (job or 'default')[:40] }}"
   memory: "{{ (states(learned_entity) | from_json({})) if learned_entity not in ['', none, []] else {} }}"
   expected: "{{ memory.get(key, 0) | int(0) }}"
+  problem: >-
+    {% set p = states(error_entity) if error_entity not in ['', none, []] else '' %}
+    {{ p if vac == 'error' and p not in ['', '0', 'none', 'None', 'unknown', 'unavailable'] else '' }}
   phase: >-
     {% if trigger.id == 'close' %}none
+    {#- Stuck for too long: close the card and keep it closed until the robot is
+        back on its dock, so it can't come back. #}
+    {% elif trigger.id == 'stuck' %}stale
+    {% elif prev == 'stale' and vac not in ['docked', 'idle'] %}stale
     {#- An error only counts during a clean: lifting the robot off its dock to
         clean it reports "error" for a few seconds, which must not look like a job. #}
     {% elif vac in ['cleaning', 'returning', 'paused'] or (vac == 'error' and prev == 'cleaning') %}cleaning
@@ -129,6 +159,15 @@ triggers:
     to: done
     for: !input done_for
     id: close
+  - trigger: state
+    entity_id: !input vacuum
+    to: [cleaning, returning, paused, error]
+    for: !input stuck_after
+    id: stuck
+  - trigger: state
+    entity_id: !input error_text
+    not_to: [unknown, unavailable]
+    id: problem
 
 actions:
   - alias: Phase changed → close the previous Live Activity
@@ -146,7 +185,7 @@ actions:
         conditions:
           - condition: template
             value_template: >-
-              {{ phase == 'cleaning' and (trigger.id == 'state' or prev != 'cleaning'
+              {{ phase == 'cleaning' and (trigger.id in ['state', 'problem'] or prev != 'cleaning'
                  or (trigger.id == 'area' and vac == 'cleaning' and area % 2 == 0
                      and trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state)) }}
         sequence:
@@ -162,7 +201,7 @@ actions:
             data:
               title: "{{ head }}"
               message: >-
-                {{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² · ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}{{ (' · ~' ~ left ~ ' min left') if left > 0 else '' }}
+                {{ (problem[:1] | upper ~ problem[1:] ~ ' · ') if problem else '' }}{{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² · ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}{{ (' · ~' ~ left ~ ' min left') if left > 0 else '' }}
               data:
                 tag: "{{ tags.cleaning }}"
                 live_update: true
