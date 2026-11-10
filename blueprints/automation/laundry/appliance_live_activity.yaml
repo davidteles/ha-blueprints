@@ -248,7 +248,8 @@ triggers:
     to: ["on", "off"]
   - trigger: state
     entity_id: !input emptied_button
-    not_from: [unavailable, unknown]
+    # Not "unknown": a button that was never pressed starts there.
+    not_from: [unavailable]
     not_to: [unavailable, unknown]
     id: emptied
   - trigger: time_pattern
