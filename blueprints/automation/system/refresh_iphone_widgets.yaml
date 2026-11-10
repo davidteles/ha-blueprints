@@ -34,7 +34,7 @@ mode: single
 
 variables:
   phones_input: !input notify_actions
-  phones: "{{ phones_input.split(',') | map('trim') | select('match', '^notify\\.') | list }}"
+  phones: "{{ phones_input.split(',') | map('trim') | select('match', '^[a-z_]+\\.[a-z0-9_]+$') | list }}"
 
 triggers:
   - trigger: state
