@@ -14,7 +14,9 @@ blueprint:
     **🔌 Plugged in** — "Waiting to charge · 63% → 80%" →
     **⚡ Charging** — "63% → 80% · 7.4 kW · 300 km", with the battery as a
     progress bar towards the charge limit → **✅ Charged** (alerts once,
-    silently at night). Everything closes by itself when the cable is unplugged.
+    silently at night). Everything closes by itself when the cable is unplugged
+    — straight away if your wall charger reports it (car sensors can lag for
+    hours after unplugging).
     If charging stops before the limit, it goes back to "plugged in".
 
 
@@ -46,6 +48,25 @@ blueprint:
       name: Cable connected sensor (optional, recommended)
       default: []
       selector: { entity: { domain: binary_sensor } }
+    charger_status:
+      name: Wall charger status (optional)
+      description: >-
+        Your charger's status sensor (e.g. Wallbox "Status description"). When
+        it says no car is connected, the card closes at once.
+      default: []
+      selector: { entity: { domain: sensor } }
+    charger_empty_values:
+      name: '"No car connected" charger values'
+      description: Separated by commas. Upper/lower case doesn't matter.
+      default: Ready, Locked, available, disconnected, not_connected
+      selector: { text: {} }
+    car_location:
+      name: Car location (optional)
+      description: >-
+        The car's device tracker. When set, the charger status only counts
+        while the car is at home, so charging elsewhere still shows.
+      default: []
+      selector: { entity: { domain: [device_tracker, person] } }
     battery:
       name: Battery level
       selector: { entity: { domain: sensor, device_class: battery } }
@@ -96,6 +117,13 @@ max: 10
 variables:
   state_entity: !input charging_state
   plug_entity: !input plug
+  charger_entity: !input charger_status
+  location_entity: !input car_location
+  empty_input: !input charger_empty_values
+  empty_list: "{{ empty_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  charger_empty: >-
+    {{ charger_entity not in ['', none, []] and states(charger_entity) | lower in empty_list
+       and (location_entity in ['', none, []] or is_state(location_entity, 'home')) }}
   battery_entity: !input battery
   limit_entity: !input limit
   power_entity: !input power
@@ -114,7 +142,7 @@ variables:
   charging: "{{ cs in charging_list }}"
   plugged: >-
     {% set b = states(plug_entity) if plug_entity not in ['', none, []] else 'none' %}
-    {{ charging or (b == 'on' if b in ['on', 'off'] else cs in plugged_list) }}
+    {{ not charger_empty and (charging or (b == 'on' if b in ['on', 'off'] else cs in plugged_list)) }}
   soc: "{{ states(battery_entity) | float(0) | round(0) | int }}"
   target: "{{ (states(limit_entity) | float(100) | round(0) | int) if limit_entity not in ['', none, []] else 100 }}"
   kw: "{{ (states(power_entity) | float(0) | round(1)) if power_entity not in ['', none, []] else 0 }}"
@@ -146,6 +174,11 @@ triggers:
     to: ["on", "off"]
     not_from: [unknown, unavailable]
     for: { minutes: 1 }
+  - alias: The wall charger says the car is gone
+    trigger: state
+    entity_id: !input charger_status
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
   - trigger: state
     entity_id: !input battery
     not_to: [unknown, unavailable]

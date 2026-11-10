@@ -5,6 +5,11 @@ blueprint:
     — "Smart Control" / "Remote start" on — but nothing has started or been
     scheduled for a while. Usually it means someone forgot to press start in
     the app.
+
+
+    **Optional "Start now" button:** add the action that starts your machine
+    (e.g. set its operation select to *run*) and the alert gets a **Start now**
+    button (press and hold the notification on the iPhone).
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/appliance_ready_not_started.yaml
   input:
@@ -32,6 +37,17 @@ blueprint:
       name: Appliance name
       default: Washer
       selector: { text: {} }
+    start_action:
+      name: '"Start now" action (optional)'
+      description: >-
+        What starts the appliance, e.g. select.select_option on its operating
+        state with "run". Leave empty for no button.
+      default: []
+      selector: { action: {} }
+    button_wait:
+      name: Keep the button working for
+      default: { hours: 2 }
+      selector: { duration: {} }
 
 mode: single
 
@@ -41,6 +57,10 @@ variables:
   idle_list: "{{ idle_input.split(',') | map('trim') | reject('eq', '') | list }}"
   notify_action: !input notify_action
   name: !input name
+  start_input: !input start_action
+  has_button: "{{ start_input not in ['', none, []] }}"
+  button_id: "{{ 'APPLIANCE_START_' ~ (context.id | upper) }}"
+  tag: "{{ name | lower | replace(' ', '-') }}-not-started"
 
 triggers:
   - trigger: state
@@ -63,7 +83,37 @@ actions:
   - action: "{{ notify_action }}"
     data:
       title: "{{ name }} waiting"
-      message: "Remote start has been on for a while, but nothing has started or been scheduled."
+      message: >-
+        Remote start has been on for a while, but nothing has started or been
+        scheduled.{{ '\n👆 Press and hold for: Start now' if has_button else '' }}
       data:
-        tag: "{{ name | lower | replace(' ', '-') }}-not-started"
+        tag: "{{ tag }}"
         push: { interruption-level: time-sensitive }
+        actions: "{{ [{'action': button_id, 'title': 'Start now', 'icon': 'sfsymbols:play.fill'}] if has_button else [] }}"
+  - if:
+      - condition: template
+        value_template: "{{ has_button }}"
+    then:
+      - wait_for_trigger:
+          - trigger: event
+            event_type: mobile_app_notification_action
+            event_data: { action: "{{ button_id }}" }
+        timeout: !input button_wait
+        continue_on_timeout: false
+      - if:
+          - condition: state
+            entity_id: !input ready
+            state: "on"
+        then:
+          - sequence: !input start_action
+          - action: "{{ notify_action }}"
+            data:
+              title: "▶️ {{ name }} started"
+              message: "Started from the phone at {{ now().strftime('%H:%M') }}."
+              data: { tag: "{{ tag }}", push: { interruption-level: passive } }
+        else:
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ name }} couldn't start"
+              message: Remote start is off. Turn it on at the machine, then try again.
+              data: { tag: "{{ tag }}" }

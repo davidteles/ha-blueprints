@@ -1,0 +1,39 @@
+blueprint:
+  name: Robot vacuum — pause or continue
+  description: >-
+    One button for a robot vacuum: it **pauses** the robot while it cleans or
+    heads home, and **continues** the job when it is paused or stopped with an
+    error. It does nothing while the robot is docked.
+
+
+    Handy in an iPhone widget (Scripts, or a Custom widget item with "Run
+    script"), on a dashboard, or behind a notification button. Live Activities
+    can't have buttons, so this is the closest to a pause button on the lock
+    screen.
+  domain: script
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/script/cleaning/vacuum_pause_or_continue.yaml
+  input:
+    vacuum:
+      name: Robot vacuum
+      selector: { entity: { domain: vacuum } }
+
+mode: single
+icon: mdi:play-pause
+
+variables:
+  vac_entity: !input vacuum
+
+sequence:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ states(vac_entity) in ['cleaning', 'returning'] }}"
+        sequence:
+          - action: vacuum.pause
+            target: { entity_id: "{{ vac_entity }}" }
+      - conditions:
+          - condition: template
+            value_template: "{{ states(vac_entity) in ['paused', 'error'] }}"
+        sequence:
+          - action: vacuum.start
+            target: { entity_id: "{{ vac_entity }}" }
