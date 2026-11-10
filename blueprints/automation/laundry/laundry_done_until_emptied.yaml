@@ -12,7 +12,10 @@ blueprint:
     toggle off from a dashboard — and the phone notification disappears too.
 
 
-    **Create first:** a Toggle helper, e.g. "Laundry waiting".
+    **Create first:** a Toggle helper, e.g. "Laundry waiting". Recommended: a
+    Date and time helper, "Washer finished at", so "done since …" stays right
+    after a restart (Home Assistant resets a toggle's "last changed" time when
+    it restarts). A dashboard can show it too.
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/laundry_done_until_emptied.yaml
   input:
@@ -38,6 +41,11 @@ blueprint:
     waiting:
       name: '"Laundry waiting" toggle'
       selector: { entity: { domain: input_boolean } }
+    finished_at:
+      name: '"Finished at" date and time helper (optional, recommended)'
+      description: Keeps the "done since" time right through Home Assistant restarts.
+      default: []
+      selector: { entity: { domain: input_datetime } }
     notify_action:
       name: Notification action
       description: e.g. notify.mobile_app_your_phone, or a notify group to reach several phones.
@@ -62,6 +70,8 @@ variables:
   finished_list: "{{ finished_input.split(',') | map('trim') | reject('eq', '') | list }}"
   running_list: "{{ running_input.split(',') | map('trim') | reject('eq', '') | list }}"
   waiting_entity: !input waiting
+  finished_entity: !input finished_at
+  has_finished: "{{ finished_entity not in ['', none, []] }}"
   notify_action: !input notify_action
   snooze_input: !input snooze
   title: !input title
@@ -106,6 +116,13 @@ actions:
         sequence:
           - action: input_boolean.turn_on
             target: { entity_id: "{{ waiting_entity }}" }
+          - if:
+              - condition: template
+                value_template: "{{ has_finished }}"
+            then:
+              - action: input_datetime.set_datetime
+                target: { entity_id: "{{ finished_entity }}" }
+                data: { timestamp: "{{ now().timestamp() }}" }
           - action: "{{ notify_action }}"
             data:
               title: "{{ title }}"
@@ -119,10 +136,14 @@ actions:
           - delay: "{{ snooze_input }}"
           - condition: template
             value_template: "{{ is_state(waiting_entity, 'on') }}"
+          - variables:
+              since: >-
+                {% set ts = state_attr(finished_entity, 'timestamp') if has_finished else none %}
+                {{ (ts | as_datetime if ts else states[waiting_entity].last_changed) | as_local }}
           - action: "{{ notify_action }}"
             data:
               title: "{{ title }} — still waiting"
-              message: "Done since {{ as_local(states[waiting_entity].last_changed).strftime('%H:%M') }}.\n👆 Press and hold for: Remind me later · Done"
+              message: "Done since {{ as_datetime(since).strftime('%H:%M') }}.\n👆 Press and hold for: Remind me later · Done"
               data: { tag: laundry, group: laundry, actions: "{{ buttons }}" }
       - alias: Emptied, or a new cycle / power-on means someone is at the machine
         conditions:

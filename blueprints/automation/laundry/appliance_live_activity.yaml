@@ -28,7 +28,10 @@ blueprint:
 
 
     **Create first:** a **Text helper** (max 20 characters) for this blueprint
-    to remember the phase, e.g. "Washer live phase".
+    to remember the phase, e.g. "Washer live phase". Recommended: a **Date and
+    time helper**, e.g. "Washer phase started", so the progress bar, "done
+    since …" and the self-closing done card stay right after a Home Assistant
+    restart (a restart resets the Text helper's "last changed" time).
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/appliance_live_activity.yaml
   input:
@@ -119,6 +122,11 @@ blueprint:
     phase_helper:
       name: Phase helper (Text)
       selector: { entity: { domain: input_text } }
+    phase_since:
+      name: Phase started at (optional, recommended)
+      description: A Date and time helper. Keeps times right through Home Assistant restarts.
+      default: []
+      selector: { entity: { domain: input_datetime } }
     name:
       name: Appliance name
       default: Washer
@@ -169,6 +177,15 @@ variables:
   waiting_entity: !input waiting
   emptied_entity: !input emptied_button
   phase_entity: !input phase_helper
+  since_entity: !input phase_since
+  has_since: "{{ since_entity not in ['', none, []] }}"
+  done_for_input: !input done_for
+  done_for_s: >-
+    {% set d = done_for_input %}
+    {{ (d.days | default(0)) * 86400 + (d.hours | default(0)) * 3600 + (d.minutes | default(0)) * 60 + (d.seconds | default(0)) }}
+  since_ts: >-
+    {% set ts = state_attr(since_entity, 'timestamp') if has_since else none %}
+    {{ (ts if ts else as_timestamp(states[phase_entity].last_changed, 0)) | int(0) }}
   name: !input name
   done_text: !input done_text
   icon: !input icon
@@ -202,6 +219,9 @@ variables:
   phase: >-
     {% if trigger.id == 'emptied' and prev == 'done' %}{{ 'ready' if ready_on else 'none' }}
     {% elif trigger.id == 'close_maybe' and waiting_entity in ['', none, []] %}none
+    {#- Restarts cancel the timed close above; the 5-minute tick catches it up. #}
+    {% elif trigger.id == 'tick' and prev == 'done' and waiting_entity in ['', none, []]
+       and has_since and now().timestamp() - since_ts >= done_for_s | float(1800) %}none
     {% elif job in programmed_list %}programmed
     {% elif job in keep_list %}{{ prev if prev in ['programmed', 'running'] else ('ready' if ready_on else 'none') }}
     {% elif job in running_list %}running
@@ -319,7 +339,7 @@ actions:
         sequence:
           - variables:
               start_ts: >-
-                {{ now_ts if prev != 'running' else (as_timestamp(states[phase_entity].last_changed) | int(now_ts)) }}
+                {{ now_ts if prev != 'running' else (since_ts if since_ts > 0 else now_ts) }}
               total: "{{ [end_ts - start_ts, 60] | max }}"
               elapsed: "{{ [[now_ts - start_ts, 0] | max, total] | min }}"
               left: "{{ [((end_ts - now_ts) / 60) | round(0) | int, 0] | max }}"
@@ -347,14 +367,14 @@ actions:
         conditions:
           - condition: template
             value_template: >-
-              {% set waited = ((now() - states[phase_entity].last_changed).total_seconds() / 60) | int if prev == 'done' else 0 %}
+              {% set waited = ((now().timestamp() - since_ts) / 60) | int if prev == 'done' else 0 %}
               {{ phase == 'done' and (phase != prev
                  or (trigger.id == 'tick' and waiting_on and reminder_list | select('le', waited) | select('gt', waited - 5) | list | count > 0)) }}
         sequence:
           - variables:
               reminder: "{{ phase == prev }}"
-              since: "{{ as_local(states[phase_entity].last_changed).strftime('%H:%M') if reminder else now().strftime('%H:%M') }}"
-              waited: "{{ ((now() - states[phase_entity].last_changed).total_seconds() / 60) | int if reminder else 0 }}"
+              since: "{{ (since_ts | timestamp_custom('%H:%M')) if reminder else now().strftime('%H:%M') }}"
+              waited: "{{ ((now().timestamp() - since_ts) / 60) | int if reminder else 0 }}"
           - action: "{{ notify_action }}"
             data:
               title: "{{ ('⏳ ' ~ name ~ ' still waiting') if reminder else ('✅ ' ~ name ~ ' done') }}"
@@ -386,3 +406,10 @@ actions:
       - action: input_text.set_value
         target: { entity_id: "{{ phase_entity }}" }
         data: { value: "{{ phase }}" }
+      - if:
+          - condition: template
+            value_template: "{{ has_since }}"
+        then:
+          - action: input_datetime.set_datetime
+            target: { entity_id: "{{ since_entity }}" }
+            data: { timestamp: "{{ now().timestamp() }}" }

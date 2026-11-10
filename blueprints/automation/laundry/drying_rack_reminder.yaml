@@ -12,7 +12,9 @@ blueprint:
 
     **Create first:** a Toggle "Laundry on the drying rack" and a Date and time
     helper "Drying-rack reminder at" (both date and time). The date/time helper
-    keeps the reminder through restarts.
+    keeps the reminder through restarts. Recommended: a second Date and time
+    helper, "Laundry hung at", so "drying since …" stays right after a restart
+    (Home Assistant resets a toggle's "last changed" time when it restarts).
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/drying_rack_reminder.yaml
   input:
@@ -25,6 +27,11 @@ blueprint:
       selector: { entity: { domain: input_boolean } }
     reminder_at:
       name: '"Drying-rack reminder at" date and time helper'
+      selector: { entity: { domain: input_datetime } }
+    hung_at:
+      name: '"Laundry hung at" date and time helper (optional, recommended)'
+      description: Keeps the "drying since" time right through Home Assistant restarts.
+      default: []
       selector: { entity: { domain: input_datetime } }
     reminder_time:
       name: Reminder time
@@ -46,6 +53,8 @@ mode: queued
 variables:
   on_rack_entity: !input on_rack
   reminder_entity: !input reminder_at
+  hung_entity: !input hung_at
+  has_hung: "{{ hung_entity not in ['', none, []] }}"
   reminder_time: !input reminder_time
   cutoff: !input same_day_before
   notify_action: !input notify_action
@@ -76,6 +85,13 @@ actions:
         sequence:
           - action: input_boolean.turn_on
             target: { entity_id: "{{ on_rack_entity }}" }
+          - if:
+              - condition: template
+                value_template: "{{ has_hung }}"
+            then:
+              - action: input_datetime.set_datetime
+                target: { entity_id: "{{ hung_entity }}" }
+                data: { timestamp: "{{ now().timestamp() }}" }
           - action: input_datetime.set_datetime
             target: { entity_id: "{{ reminder_entity }}" }
             data:
@@ -89,11 +105,15 @@ actions:
           - condition: template
             value_template: "{{ is_state(on_rack_entity, 'on') }}"
         sequence:
+          - variables:
+              since: >-
+                {% set ts = state_attr(hung_entity, 'timestamp') if has_hung else none %}
+                {{ (ts | as_datetime if ts else states[on_rack_entity].last_changed) | as_local }}
           - action: "{{ notify_action }}"
             data:
               title: "👕 Laundry on the drying rack"
               message: >-
-                Drying since {{ as_local(states[on_rack_entity].last_changed).strftime('%a %H:%M') }} — time to put it away.
+                Drying since {{ as_datetime(since).strftime('%a %H:%M') }} — time to put it away.
                 👆 Press and hold for: Put away
               data:
                 tag: laundry-rack
