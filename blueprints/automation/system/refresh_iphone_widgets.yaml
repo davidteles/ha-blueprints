@@ -8,8 +8,8 @@ blueprint:
 
 
     iOS allows only about 40–70 widget reloads a day, so it waits between
-    refreshes (5 minutes by default) and drops the changes in between; the next
-    refresh shows the latest values anyway.
+    refreshes (5 minutes by default) and skips the changes in between; the
+    next refresh shows the latest values anyway.
 
 
     Needs the Home Assistant app on iOS 17 or later, with a widget on the Home
@@ -31,8 +31,13 @@ blueprint:
       selector: { duration: {} }
 
 mode: single
+max_exceeded: silent
 
 variables:
+  gap_input: !input gap
+  gap_seconds: >-
+    {% set g = gap_input %}
+    {{ (g.days | default(0)) * 86400 + (g.hours | default(0)) * 3600 + (g.minutes | default(0)) * 60 + (g.seconds | default(0)) }}
   phones_input: !input notify_actions
   phones: "{{ phones_input.split(',') | map('trim') | select('match', '^[a-z_]+\\.[a-z0-9_]+$') | list }}"
 
@@ -42,6 +47,13 @@ triggers:
     not_from: [unknown, unavailable]
     not_to: [unknown, unavailable]
 
+conditions:
+  - alias: At most one refresh per gap (iOS allows ~40–70 reloads a day)
+    condition: template
+    value_template: >-
+      {% set last = this.attributes.last_triggered %}
+      {{ last is none or (now() - last).total_seconds() >= gap_seconds | float(300) }}
+
 actions:
   - repeat:
       for_each: "{{ phones }}"
@@ -50,5 +62,3 @@ actions:
           continue_on_error: true
           data:
             message: update_widgets
-  - alias: Wait before the next refresh (new changes meanwhile are dropped)
-    delay: !input gap

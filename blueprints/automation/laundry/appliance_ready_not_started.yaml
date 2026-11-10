@@ -59,7 +59,7 @@ variables:
   name: !input name
   start_input: !input start_action
   has_button: "{{ start_input not in ['', none, []] }}"
-  button_id: "{{ 'APPLIANCE_START_' ~ (context.id | upper) }}"
+  button_id: "{{ 'START_' ~ (name | upper | regex_replace('[^A-Z0-9]+', '_')) ~ '_' ~ (now().timestamp() | int) }}"
   tag: "{{ name | lower | replace(' ', '-') }}-not-started"
 
 triggers:
