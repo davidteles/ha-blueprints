@@ -1,0 +1,87 @@
+blueprint:
+  name: Reload an integration when one entity freezes or goes unavailable
+  description: >-
+    Some integrations stop updating without telling anyone: the values freeze,
+    or one important entity (a to-do list, a sensor) drops to "unavailable" and
+    never comes back until you press "Reload". This watches one entity and
+    reloads its integration when it has not reported for a while (frozen) or
+    has been unavailable for a while. A cooldown stops reload loops, and you get
+    a short message the first time it happens after Home Assistant starts.
+
+
+    Frozen means the entity has not reported any update, not even the same
+    value; that is Home Assistant's "last reported" time. Pick an entity that
+    normally reports often (every minute or so).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/system/reload_when_entity_freezes.yaml
+  input:
+    watched:
+      name: Entity to watch
+      selector: { entity: {} }
+    problem:
+      name: Reload when it is
+      default: frozen
+      selector:
+        select:
+          options:
+            - { label: "Frozen (no updates)", value: frozen }
+            - { label: "Unavailable", value: unavailable }
+            - { label: "Either", value: either }
+    minutes:
+      name: For how long
+      default: 10
+      selector: { number: { min: 2, max: 240, unit_of_measurement: min } }
+    cooldown_hours:
+      name: Wait at least this long between reloads
+      default: 2
+      selector: { number: { min: 0, max: 24, unit_of_measurement: h } }
+    notify_action:
+      name: Notification action (leave empty for none)
+      default: notify.notify
+      selector: { text: {} }
+
+mode: single
+
+variables:
+  watched: !input watched
+  problem: !input problem
+  minutes: !input minutes
+  cooldown_hours: !input cooldown_hours
+  notify_action: !input notify_action
+
+triggers:
+  - trigger: time_pattern
+    minutes: /5
+
+conditions:
+  - condition: template
+    value_template: >-
+      {%- set s = states[watched] -%}
+      {%- set limit = now() - timedelta(minutes=minutes | int) -%}
+      {%- set frozen = s is not none and s.state not in ['unavailable', 'unknown'] and s.last_reported < limit -%}
+      {%- set gone = s is none or (s.state == 'unavailable' and s.last_changed < limit) -%}
+      {{ (problem == 'frozen' and frozen) or (problem == 'unavailable' and gone) or (problem == 'either' and (frozen or gone)) }}
+  - condition: template
+    value_template: >-
+      {{ this.attributes.last_triggered is none
+         or now() - this.attributes.last_triggered > timedelta(hours=cooldown_hours | float) }}
+
+actions:
+  - variables:
+      first_time: "{{ this.attributes.last_triggered is none }}"
+  - action: homeassistant.reload_config_entry
+    target: { entity_id: "{{ watched }}" }
+    continue_on_error: true
+  - if:
+      - condition: template
+        value_template: "{{ first_time and notify_action | length > 0 }}"
+    then:
+      - action: "{{ notify_action }}"
+        continue_on_error: true
+        data:
+          title: "🔄 Reloaded {{ state_attr(watched, 'friendly_name') or watched }}"
+          message: >-
+            It had {{ 'stopped updating' if states(watched) not in ['unavailable', 'unknown'] else 'been unavailable' }}
+            for {{ minutes | int }} minutes, so its integration was reloaded. You only get this message once;
+            later reloads happen silently (see the automation's traces).
+          data: { tag: "freeze-watch-{{ watched }}" }
