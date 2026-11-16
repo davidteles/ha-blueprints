@@ -9,7 +9,9 @@ blueprint:
 
 
     Works with any to-do list that keeps ticked-off items (Local To-do, the
-    Shopping list integration, most cloud lists).
+    Shopping list integration, most cloud lists). While a cloud list is
+    unavailable it waits quietly and keeps the last ranking, instead of
+    logging an error on every change.
 
 
     **Create first:** a Text helper "Buy again" with maximum length 255.
@@ -41,6 +43,11 @@ triggers:
     at: "04:00:00"
   - trigger: homeassistant
     event: start
+
+conditions:
+  - alias: Only while the list is available (cloud lists drop out at times)
+    condition: template
+    value_template: "{{ states(todo_list) not in ['unavailable', 'unknown'] }}"
 
 actions:
   - delay: { milliseconds: 300 }
