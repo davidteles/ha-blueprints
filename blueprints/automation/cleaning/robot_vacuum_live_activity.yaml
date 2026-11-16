@@ -98,7 +98,7 @@ blueprint:
 mode: queued
 max: 10
 
-variables:
+variables: &live_vars
   vac_entity: !input vacuum
   area_entity: !input area
   duration_entity: !input duration
@@ -170,6 +170,11 @@ triggers:
     id: problem
 
 actions:
+  - alias: >-
+      Read everything again now. Queued runs would otherwise use the state from
+      when they were triggered, and several sensors changing in the same second
+      each started their own card (duplicates on the phone).
+    variables: *live_vars
   - alias: Phase changed → close the previous Live Activity
     if:
       - condition: template
@@ -253,3 +258,11 @@ actions:
       - action: input_text.set_value
         target: { entity_id: "{{ phase_entity }}" }
         data: { value: "{{ phase }}" }
+  - alias: >-
+      A new card was just started: give the phone 15 s to register it before the
+      next update, or iOS starts a second card for the same tag
+    if:
+      - condition: template
+        value_template: "{{ phase != prev and phase in tags }}"
+    then:
+      - delay: { seconds: 15 }
