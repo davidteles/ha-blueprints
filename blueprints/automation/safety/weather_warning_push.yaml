@@ -1,0 +1,79 @@
+blueprint:
+  name: Weather warning push
+  description: >-
+    Sends a phone notification when your weather-warning sensor reaches a level
+    you care about (for example orange or red), updates the same notification
+    when the level changes, and removes it when the warning is over.
+
+
+    Works with any sensor whose state is a warning level, such as the warning
+    sensors of many national weather services. If the sensor has an attribute
+    with the warning text or type, name it below and it is added to the
+    message.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/safety/weather_warning_push.yaml
+  input:
+    warning_sensor:
+      name: Warning sensor
+      selector: { entity: { domain: sensor } }
+    levels:
+      name: Notify for these levels (exactly as the sensor reports them)
+      default: [orange, red]
+      selector: { text: { multiple: true } }
+    clear_levels:
+      name: Levels that mean "no warning" (the notification is removed)
+      default: [green]
+      selector: { text: { multiple: true } }
+    text_attribute:
+      name: Attribute with the warning text (optional)
+      default: ""
+      selector: { text: {} }
+    type_attribute:
+      name: Attribute with the warning type (optional)
+      default: ""
+      selector: { text: {} }
+    notify_action:
+      name: Notification action
+      default: notify.notify
+      selector: { text: {} }
+
+mode: queued
+
+variables:
+  sensor: !input warning_sensor
+  levels: !input levels
+  clear_levels: !input clear_levels
+  text_attribute: !input text_attribute
+  type_attribute: !input type_attribute
+  notify_action: !input notify_action
+  level: "{{ trigger.to_state.state | lower }}"
+  wanted: "{{ levels | map('lower') | list }}"
+  clear: "{{ clear_levels | map('lower') | list }}"
+  icon: "{{ {'red': '🔴', 'orange': '🟠', 'yellow': '🟡'}.get(level, '⚠️') }}"
+  kind: "{{ state_attr(sensor, type_attribute) if type_attribute else '' }}"
+  detail: "{{ state_attr(sensor, text_attribute) if text_attribute else '' }}"
+
+triggers:
+  - trigger: state
+    entity_id: !input warning_sensor
+    not_from: [unavailable, unknown]
+    not_to: [unavailable, unknown]
+
+actions:
+  - choose:
+      - conditions: "{{ level in wanted }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            data:
+              title: "{{ icon }} {{ level | capitalize }} weather warning{{ ': ' ~ kind if kind else '' }}"
+              message: "{{ detail if detail else 'A ' ~ level ~ ' warning is now active.' }}"
+              data:
+                tag: "weather-warning-{{ sensor }}"
+                push: { interruption-level: "{{ 'time-sensitive' if level == wanted | last else 'active' }}" }
+      - conditions: "{{ level in clear }}"
+        sequence:
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: "weather-warning-{{ sensor }}" }
