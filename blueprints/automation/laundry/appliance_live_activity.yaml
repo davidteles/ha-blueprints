@@ -166,7 +166,7 @@ blueprint:
 mode: queued
 max: 10
 
-variables:
+variables: &live_vars
   job_entity: !input job_state
   ready_entity: !input ready_sensor
   power_ent: !input power_entity
@@ -287,6 +287,11 @@ conditions:
     value_template: "{{ trigger.id != 'tick' or prev == 'done' }}"
 
 actions:
+  - alias: >-
+      Read everything again now. Queued runs would otherwise use the state from
+      when they were triggered, and several sensors changing in the same second
+      each started their own card (duplicates on the phone).
+    variables: *live_vars
   - alias: Phase changed → close the previous Live Activity
     if:
       - condition: template
@@ -413,3 +418,11 @@ actions:
           - action: input_datetime.set_datetime
             target: { entity_id: "{{ since_entity }}" }
             data: { timestamp: "{{ now().timestamp() }}" }
+  - alias: >-
+      A new card was just started: give the phone 15 s to register it before the
+      next update, or iOS starts a second card for the same tag
+    if:
+      - condition: template
+        value_template: "{{ phase != prev and phase in tags }}"
+    then:
+      - delay: { seconds: 15 }
