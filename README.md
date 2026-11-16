@@ -106,6 +106,7 @@ tap_action:
 |---|---|---|
 | **Shower detection turns the bathroom light on** | Mirror light on and humidity rising fast → main light on. Uses a Derivative helper. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flights%2Fshower_light.yaml) |
 | **One button, several jobs** | Single / double / triple / long press each do something different. Works with any event-entity button; press names are configurable. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fbuttons%2Fone_button_several_jobs.yaml) |
+| **IKEA BILRESA scroll wheel (Matter)** | The whole remote in one automation: each of the 3 channels dims its own lights with the wheel (faster turn = bigger step) and toggles them with a press; double / triple / long press per channel or on every channel. Entities are preselected for the first remote. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fbuttons%2Fikea_bilresa_scroll_wheel.yaml) |
 
 ## Housekeeping
 
