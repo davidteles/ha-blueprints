@@ -1,0 +1,236 @@
+blueprint:
+  name: IKEA BILRESA scroll wheel (Matter) - all three channels in one automation
+  description: >-
+    One automation for the whole IKEA BILRESA scroll wheel remote, instead of
+    one per channel. Each of its three channels (the dots on the remote) can
+    dim its own lights with the wheel and toggle them with a single press.
+    Double, triple and long presses can do the same job on every channel
+    (e.g. long press = everything off) and/or something per channel.
+
+
+    **Setup:** pair the remote with the Matter integration. It shows up as nine
+    event entities: per channel *wheel turned right*, *wheel turned left* and
+    *centre button*. The defaults below are Home Assistant's own names for the
+    first BILRESA you add; if you renamed them or have a second remote, pick
+    them from the remote's device page (they are listed in that order).
+
+
+    Turning the wheel fast sends several clicks at once; each click changes the
+    brightness by the step you choose, so a fast turn dims further. Turning
+    left all the way switches the lights off.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/buttons/ikea_bilresa_scroll_wheel.yaml
+  input:
+    every_channel:
+      name: Every channel
+      input:
+        step:
+          name: Brightness change per wheel click
+          default: 10
+          selector: { number: { min: 1, max: 25, step: 1, unit_of_measurement: "%" } }
+        double_any:
+          name: Double press (any channel)
+          default: []
+          selector: { action: {} }
+        triple_any:
+          name: Triple press (any channel)
+          default: []
+          selector: { action: {} }
+        long_any:
+          name: Long press (any channel)
+          default: []
+          selector: { action: {} }
+    channel_1:
+      name: Channel 1
+      input:
+        lights_1:
+          name: Lights (wheel dims them, single press toggles them)
+          default: []
+          selector: { entity: { domain: light, multiple: true } }
+        single_1:
+          name: Single press, extra action
+          default: []
+          selector: { action: {} }
+        double_1:
+          name: Double press
+          default: []
+          selector: { action: {} }
+        triple_1:
+          name: Triple press
+          default: []
+          selector: { action: {} }
+        long_1:
+          name: Long press
+          default: []
+          selector: { action: {} }
+    channel_2:
+      name: Channel 2
+      collapsed: true
+      input:
+        lights_2:
+          name: Lights (wheel dims them, single press toggles them)
+          default: []
+          selector: { entity: { domain: light, multiple: true } }
+        single_2:
+          name: Single press, extra action
+          default: []
+          selector: { action: {} }
+        double_2:
+          name: Double press
+          default: []
+          selector: { action: {} }
+        triple_2:
+          name: Triple press
+          default: []
+          selector: { action: {} }
+        long_2:
+          name: Long press
+          default: []
+          selector: { action: {} }
+    channel_3:
+      name: Channel 3
+      collapsed: true
+      input:
+        lights_3:
+          name: Lights (wheel dims them, single press toggles them)
+          default: []
+          selector: { entity: { domain: light, multiple: true } }
+        single_3:
+          name: Single press, extra action
+          default: []
+          selector: { action: {} }
+        double_3:
+          name: Double press
+          default: []
+          selector: { action: {} }
+        triple_3:
+          name: Triple press
+          default: []
+          selector: { action: {} }
+        long_3:
+          name: Long press
+          default: []
+          selector: { action: {} }
+    remote:
+      name: The remote's event entities (only if you renamed them)
+      collapsed: true
+      input:
+        right_1:
+          name: Channel 1 - wheel turned right
+          default: event.bilresa_scroll_wheel_button_1
+          selector: { entity: { domain: event, integration: matter } }
+        left_1:
+          name: Channel 1 - wheel turned left
+          default: event.bilresa_scroll_wheel_button_2
+          selector: { entity: { domain: event, integration: matter } }
+        button_1:
+          name: Channel 1 - centre button
+          default: event.bilresa_scroll_wheel_button_3
+          selector: { entity: { domain: event, integration: matter } }
+        right_2:
+          name: Channel 2 - wheel turned right
+          default: event.bilresa_scroll_wheel_button_4
+          selector: { entity: { domain: event, integration: matter } }
+        left_2:
+          name: Channel 2 - wheel turned left
+          default: event.bilresa_scroll_wheel_button_5
+          selector: { entity: { domain: event, integration: matter } }
+        button_2:
+          name: Channel 2 - centre button
+          default: event.bilresa_scroll_wheel_button_6
+          selector: { entity: { domain: event, integration: matter } }
+        right_3:
+          name: Channel 3 - wheel turned right
+          default: event.bilresa_scroll_wheel_button_7
+          selector: { entity: { domain: event, integration: matter } }
+        left_3:
+          name: Channel 3 - wheel turned left
+          default: event.bilresa_scroll_wheel_button_8
+          selector: { entity: { domain: event, integration: matter } }
+        button_3:
+          name: Channel 3 - centre button
+          default: event.bilresa_scroll_wheel_button_9
+          selector: { entity: { domain: event, integration: matter } }
+
+mode: queued
+max: 10
+
+triggers:
+  - { trigger: state, entity_id: !input right_1, id: "1_right", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input left_1, id: "1_left", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input button_1, id: "1_button", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input right_2, id: "2_right", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input left_2, id: "2_left", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input button_2, id: "2_button", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input right_3, id: "3_right", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input left_3, id: "3_left", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+  - { trigger: state, entity_id: !input button_3, id: "3_button", not_from: [unavailable, unknown], not_to: [unavailable, unknown] }
+
+variables:
+  step_in: !input step
+  lights_in_1: !input lights_1
+  lights_in_2: !input lights_2
+  lights_in_3: !input lights_3
+  channel: "{{ trigger.id.split('_')[0] | int }}"
+  part: "{{ trigger.id.split('_')[1] }}"
+  press: "{{ trigger.to_state.attributes.event_type | default('') }}"
+  clicks: >-
+    {{ trigger.to_state.attributes.totalNumberOfPressesCounted
+       | default(press.split('_')[-1], true) | int(1) }}
+  lights: >-
+    {% set l = [lights_in_1, lights_in_2, lights_in_3][channel - 1] %}
+    {{ [l] if l is string else l }}
+
+actions:
+  - choose:
+      # The wheel: brighter / dimmer by one step per click.
+      - conditions: "{{ part in ['right', 'left'] and lights | count > 0 }}"
+        sequence:
+          - action: light.turn_on
+            target: { entity_id: "{{ lights }}" }
+            data:
+              brightness_step_pct: "{{ (clicks * step_in) * (1 if part == 'right' else -1) }}"
+      # Centre button, single press: toggle the channel's lights + its extra action.
+      - conditions: "{{ part == 'button' and press == 'multi_press_1' }}"
+        sequence:
+          - if: "{{ lights | count > 0 }}"
+            then:
+              - action: light.toggle
+                target: { entity_id: "{{ lights }}" }
+          - choose:
+              - conditions: "{{ channel == 1 }}"
+                sequence: !input single_1
+              - conditions: "{{ channel == 2 }}"
+                sequence: !input single_2
+              - conditions: "{{ channel == 3 }}"
+                sequence: !input single_3
+      - conditions: "{{ part == 'button' and press == 'multi_press_2' }}"
+        sequence:
+          - choose:
+              - conditions: "{{ channel == 1 }}"
+                sequence: !input double_1
+              - conditions: "{{ channel == 2 }}"
+                sequence: !input double_2
+              - conditions: "{{ channel == 3 }}"
+                sequence: !input double_3
+          - sequence: !input double_any
+      - conditions: "{{ part == 'button' and press == 'multi_press_3' }}"
+        sequence:
+          - choose:
+              - conditions: "{{ channel == 1 }}"
+                sequence: !input triple_1
+              - conditions: "{{ channel == 2 }}"
+                sequence: !input triple_2
+              - conditions: "{{ channel == 3 }}"
+                sequence: !input triple_3
+          - sequence: !input triple_any
+      - conditions: "{{ part == 'button' and press == 'long_press' }}"
+        sequence:
+          - choose:
+              - conditions: "{{ channel == 1 }}"
+                sequence: !input long_1
+              - conditions: "{{ channel == 2 }}"
+                sequence: !input long_2
+              - conditions: "{{ channel == 3 }}"
+                sequence: !input long_3
+          - sequence: !input long_any
