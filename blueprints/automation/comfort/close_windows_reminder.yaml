@@ -9,6 +9,13 @@ blueprint:
 
     - **Too cold:** it is already cool inside and colder outside than in —
       close the windows to keep the warmth.
+
+
+    It only reminds you when a window is actually open, and names the open
+    ones. By default it watches every window sensor that belongs to a room
+    (Settings → Areas), so a new sensor counts as soon as it has a room; you can
+    also pick the windows yourself or exclude some. Without any window
+    sensors it reminds you as before.
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/comfort/close_windows_reminder.yaml
   input:
@@ -34,6 +41,16 @@ blueprint:
       name: Home zone
       default: zone.home
       selector: { entity: { domain: zone } }
+    windows:
+      name: Windows to watch (optional)
+      description: Leave empty to watch every window sensor that belongs to a room.
+      default: []
+      selector: { entity: { domain: binary_sensor, device_class: window, multiple: true } }
+    exclude:
+      name: Window sensors to ignore (optional)
+      description: E.g. a "window open" guess from a thermostat.
+      default: []
+      selector: { entity: { domain: binary_sensor, multiple: true } }
     notify_action:
       name: Notification action
       default: notify.notify
@@ -49,6 +66,16 @@ trigger_variables:
 
 variables:
   notify_action: !input notify_action
+  chosen: !input windows
+  exclude: !input exclude
+  watched: >-
+    {% if chosen | count > 0 %}{{ chosen }}{% else %}
+    {% set ns = namespace(o=[]) %}
+    {% for s in states.binary_sensor | selectattr('attributes.device_class', 'defined')
+         | selectattr('attributes.device_class', 'eq', 'window') %}
+    {% if area_id(s.entity_id) and s.entity_id not in exclude %}{% set ns.o = ns.o + [s.entity_id] %}{% endif %}
+    {% endfor %}{{ ns.o }}{% endif %}
+  open_names: "{{ watched | select('is_state', 'on') | map('state_attr', 'friendly_name') | list }}"
 
 triggers:
   - trigger: template
@@ -68,11 +95,13 @@ conditions:
   - condition: numeric_state
     entity_id: !input home_zone
     above: 0
+  - condition: template
+    value_template: "{{ watched | count == 0 or open_names | count > 0 }}"
 
 actions:
   - action: "{{ notify_action }}"
     data:
       title: "🪟 Time to close the windows"
       message: >-
-        {% if trigger.id == 'warm' %}It's warmer outside ({{ states(outdoor) }} °C) than inside ({{ states(indoor) }} °C) — close them to keep the heat out.{% else %}It's colder outside ({{ states(outdoor) }} °C) than inside ({{ states(indoor) }} °C) — close them to keep the warmth in.{% endif %}
+        {% if trigger.id == 'warm' %}It's warmer outside ({{ states(outdoor) }} °C) than inside ({{ states(indoor) }} °C) — close them to keep the heat out.{% else %}It's colder outside ({{ states(outdoor) }} °C) than inside ({{ states(indoor) }} °C) — close them to keep the warmth in.{% endif %}{% if open_names | count > 0 %} Open: {{ open_names[:-1] | join(', ') ~ (' and ' if open_names | count > 1 else '') ~ open_names[-1] }}.{% endif %}
       data: { tag: close-windows }
