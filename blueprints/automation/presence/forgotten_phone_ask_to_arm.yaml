@@ -19,6 +19,10 @@ blueprint:
     ignored.
 
 
+    With the optional **Guest at home** switch on, it never asks (the house
+    isn't empty).
+
+
     **The alarm must arm without a code** from Home Assistant for the button to
     work (e.g. Alarmo: "Require code for arming" off for that mode).
   domain: automation
@@ -64,6 +68,13 @@ blueprint:
       name: Ask after nothing has moved for
       default: { minutes: 15 }
       selector: { duration: {} }
+    guest_switch:
+      name: Guest at home switch (optional)
+      description: >-
+        A toggle (e.g. an input_boolean "Guest at home") that is on while someone
+        stays in the house without you. While it is on, it never asks.
+      default: []
+      selector: { entity: { domain: [input_boolean, switch, binary_sensor] } }
     arm_mode:
       name: Arm mode for the button
       default: alarm_arm_away
@@ -95,6 +106,8 @@ variables:
       {% if kv | count == 2 %}{% set ns.d = dict(ns.d, **{kv[0] | trim: kv[1] | trim}) %}{% endif %}
     {% endfor %}{{ ns.d }}
   tag: forgotten-phone
+  guest_switch: !input guest_switch
+  guest_home: "{{ guest_switch not in ['', none, []] and is_state(guest_switch, 'on') }}"
 
 triggers:
   - trigger: zone
@@ -130,6 +143,9 @@ actions:
         conditions:
           - condition: trigger
             id: watch
+          - alias: No guest at home
+            condition: template
+            value_template: "{{ not guest_home }}"
           - condition: template
             value_template: "{{ is_state(alarm, 'disarmed') }}"
           - alias: A phone still says home, and someone is away to ask
