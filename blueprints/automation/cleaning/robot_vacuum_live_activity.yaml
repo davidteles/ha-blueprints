@@ -217,6 +217,17 @@ actions:
         data:
           message: clear_notification
           data: { tag: "{{ tags[prev] }}" }
+  - alias: Just finished → learn the area (also while the card is hidden)
+    if:
+      - condition: template
+        value_template: >-
+          {{ phase == 'done' and prev != 'done' and learned_entity not in ['', none, []] and has_area and area >= 3 }}
+    then:
+      - action: input_text.set_value
+        target: { entity_id: "{{ learned_entity }}" }
+        data:
+          value: >-
+            {% set n = dict(memory, **{key: area}) %}{% set j = n | to_json %}{{ j if j | count <= 255 else ({key: area} | to_json) }}
   - alias: Show the card (skipped while "hide until done" is on)
     if:
       - condition: template
@@ -257,20 +268,11 @@ actions:
                     notification_icon_color: "{{ '#F44336' if vac == 'error' else '#9C27B0' }}"
                     progress_bar_color: "#9C27B0"
                     url: "{{ url }}"
-          - alias: Just finished → learn the area, show "finished"
+          - alias: Just finished → show "finished"
             conditions:
               - condition: template
                 value_template: "{{ phase == 'done' and prev != 'done' }}"
             sequence:
-              - if:
-                  - condition: template
-                    value_template: "{{ learned_entity not in ['', none, []] and has_area and area >= 3 }}"
-                then:
-                  - action: input_text.set_value
-                    target: { entity_id: "{{ learned_entity }}" }
-                    data:
-                      value: >-
-                        {% set n = dict(memory, **{key: area}) %}{% set j = n | to_json %}{{ j if j | count <= 255 else ({key: area} | to_json) }}
               - action: "{{ notify_action }}"
                 data:
                   title: "✅ {{ name }} finished"

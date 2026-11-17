@@ -165,7 +165,7 @@ variables: &live_vars
   phase: >-
     {% if not plugged %}none
     {% elif charging %}charging
-    {% elif prev in ['charging', 'charged'] and soc >= target - 1 %}charged
+    {% elif prev in ['charging', 'charged'] and (soc >= target - 1 or cs == 'conserving') %}charged
     {% else %}waiting{% endif %}
   tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
   tags:
