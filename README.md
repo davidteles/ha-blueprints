@@ -2,6 +2,54 @@
 
 Small, well-behaved automations from a real home, each one built to stay polite with the people living there. Import them with one click and fill in your own entities.
 
+## Start here: three picks
+
+New to these? Start with one of these three. Each one is a single automation, says exactly what it needs, and can be checked in a couple of minutes.
+
+### 1. Pause an appliance while a window is open
+**The problem:** the heater, dehumidifier or AC keeps running with the window open, and a simple "window closed → turn it back on" automation also turns on things you had switched off yourself.
+**What's different:** it only turns the appliance back on if **it** was the one that paused it. Switch it on by hand while the window is open and it's left alone.
+
+| You need | Changes devices? | Works with |
+|---|---|---|
+| A window/door sensor, the appliance (humidifier, climate, fan or switch) and a **Toggle** helper, e.g. "Dehumidifier paused by window" | **Yes**: switches the appliance off and back on | Any Home Assistant |
+
+[![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpause_appliance_while_window_open.yaml)
+
+**Check it (about 10 min with the defaults: 5 min open, 1 min closed):**
+1. Appliance **on** → open the window → after 5 min it switches **off** and the toggle turns on → close it → after 1 min it's back **on**.
+2. Appliance **off** → open and close the window → it **stays off** (the automation never paused it).
+
+### 2. Laundry done, until someone empties the machine
+**The problem:** "washing done" alerts are easy to miss, and once the machine powers itself off the dashboard forgets there's wet laundry inside.
+**What's different:** a "laundry waiting" toggle stays on until someone deals with it, and clears itself (notification included) when you press **Done**, start the next cycle or switch the machine on.
+
+| You need | Changes devices? | Works with |
+|---|---|---|
+| The machine's state sensor (e.g. job state) and a **Toggle** helper "Laundry waiting". Optional: a power sensor and a **Date and time** helper "Washer finished at" | **No**: notification and helper only | Any Home Assistant, any phone with the companion app |
+
+[![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Flaundry_done_until_emptied.yaml)
+
+**Check it (2 min):** in *Developer tools → States*, set the machine's state sensor to `finish` → the toggle turns on and one notification arrives → press **Done** → the toggle turns off and the notification disappears. (The integration puts the real state back at its next update.)
+
+### 3. EV charging on the iPhone lock screen
+**The problem:** opening the car app just to see whether it's charging and how far it's got.
+**What's different:** one Live Activity per phase (🔌 plugged in → ⚡ charging → ✅ charged), so long waits for cheap hours never hit the iPhone's 8-hour limit; it closes when you unplug.
+
+| You need | Changes devices? | Works with |
+|---|---|---|
+| The car's charging-state and battery sensors and a **Text** helper (max 20), e.g. "Car live phase". Optional: plug, charge limit, power, range, wall charger status | **No**: notifications only | **iPhone only**: iOS 17.2+ and the Home Assistant app 2026.x with Live Activities on ([how](#live-activities-iphone-lock-screen)) |
+
+[![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcar%2Fev_charging_live_activity.yaml)
+
+**Check it (next time you charge):** plug in → 🔌 card on the lock screen → charging starts → ⚡ with battery and power → unplug → the card closes.
+
+---
+
+# The full collection
+
+## General
+
 | Blueprint | What it does | Import |
 |---|---|---|
 | **Motion light auto-off, with a pause timer** | Light off after no motion; a timer helper pauses it while you're busy there; after the pause it only turns off if the room is really empty | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fmotion_light_off_with_pause.yaml) |
@@ -67,6 +115,8 @@ tap_action:
 ```
 
 ## Safety
+
+> These add to your smoke, CO and leak alarms and to a monitored alarm system. They don't replace them: a blueprint can only act while Home Assistant, your network and the sensors are working.
 
 | Blueprint | What it does | Import |
 |---|---|---|
