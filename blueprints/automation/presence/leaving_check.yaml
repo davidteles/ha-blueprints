@@ -8,6 +8,10 @@ blueprint:
 
 
     Garage doors are listed but deliberately *not* closable from here.
+
+
+    Optional **Guest at home** switch: while it is on, nothing is sent (someone
+    is still in the house).
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/presence/leaving_check.yaml
   input:
@@ -36,6 +40,13 @@ blueprint:
       name: List lights that are on
       default: true
       selector: { boolean: {} }
+    guest_switch:
+      name: Guest at home switch (optional)
+      description: >-
+        A toggle (e.g. an input_boolean "Guest at home") that is on while someone
+        stays in the house without you. While it is on, leaving sends nothing.
+      default: []
+      selector: { entity: { domain: [input_boolean, switch, binary_sensor] } }
     notify_action:
       name: Notification action
       default: notify.notify
@@ -52,6 +63,8 @@ variables:
     {{ (ignore_input + by_label) | unique | list }}
   check_lights: !input check_lights
   notify_action: !input notify_action
+  guest_switch: !input guest_switch
+  guest_home: "{{ guest_switch not in ['', none, []] and is_state(guest_switch, 'on') }}"
   openings: >-
     {{ states.binary_sensor | selectattr('attributes.device_class', 'defined')
        | selectattr('attributes.device_class', 'in', ['door', 'window', 'garage_door', 'opening'])
@@ -85,6 +98,9 @@ actions:
       - conditions:
           - condition: trigger
             id: left
+          - alias: No guest at home
+            condition: template
+            value_template: "{{ not guest_home }}"
           - condition: template
             value_template: "{{ items | count > 0 }}"
         sequence:
