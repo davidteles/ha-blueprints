@@ -56,7 +56,7 @@ variables:
   heat: !input heating_active
   split: "{{ heating_counter | length > 0 and other_counter | length > 0 and heat | length > 0 }}"
   heating_now: >-
-    {% if heat | length == 0 %}false
+    {% if heat | length == 0 %}{{ false }}
     {% elif heat.startswith('climate.') %}{{ state_attr(heat, 'hvac_action') == 'heating' }}
     {% elif heat.startswith('binary_sensor.') %}{{ is_state(heat, 'on') }}
     {% else %}{{ states(heat) | float(0) > 0 }}{% endif %}
