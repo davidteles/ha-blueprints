@@ -105,6 +105,17 @@ blueprint:
       name: Quiet until
       default: "08:00:00"
       selector: { time: {} }
+    hide_switch:
+      name: '"Hide until done" switch (optional)'
+      description: >-
+        A toggle helper (input_boolean) with a button on the page the card
+        opens. Turning it on closes the card on this phone and stops its
+        updates; when the job finishes you get one normal notification
+        instead, and the switch turns itself off when the job is over. For a
+        per-phone choice, make one automation per phone, each with its own
+        notification action, phase helper and switch.
+      default: []
+      selector: { entity: { domain: input_boolean } }
     notify_action:
       name: Notification action
       description: e.g. notify.mobile_app_your_phone.
@@ -132,6 +143,8 @@ variables: &live_vars
   name: !input name
   url: !input url
   notify_action: !input notify_action
+  hide_entity: !input hide_switch
+  hidden: "{{ hide_entity not in ['', none, []] and is_state(hide_entity, 'on') }}"
   quiet_start: !input quiet_start
   quiet_end: !input quiet_end
   charging_input: !input charging_values
@@ -191,6 +204,11 @@ triggers:
     entity_id: !input power
     not_to: [unknown, unavailable]
     not_from: [unknown, unavailable]
+  - alias: '"Hide until done" switched on'
+    trigger: state
+    entity_id: !input hide_switch
+    to: "on"
+    id: hide
 
 actions:
   - alias: >-
@@ -198,6 +216,20 @@ actions:
       when they were triggered, and several sensors changing in the same second
       each started their own card (duplicates on the phone).
     variables: *live_vars
+  - alias: '"Hide until done" switched on → close the card on this phone now'
+    if:
+      - condition: template
+        value_template: "{{ trigger.id == 'hide' }}"
+    then:
+      - repeat:
+          for_each: "{{ tags.values() | list }}"
+          sequence:
+            - action: "{{ notify_action }}"
+              continue_on_error: true
+              data:
+                message: clear_notification
+                data: { tag: "{{ repeat.item }}" }
+      - stop: Card hidden on this phone
   - alias: Phase changed → close the previous Live Activity
     if:
       - condition: template
@@ -208,32 +240,56 @@ actions:
         data:
           message: clear_notification
           data: { tag: "{{ tags[prev] }}" }
-  - alias: Show the current phase
+  - alias: Show the card (skipped while "hide until done" is on)
     if:
       - condition: template
-        value_template: "{{ phase in tags }}"
+        value_template: "{{ not hidden }}"
     then:
-      - variables:
-          range_text: "{{ (km ~ ' ' ~ km_unit) if km > 0 else '' }}"
-      - action: "{{ notify_action }}"
-        data:
-          title: >-
-            {{ {'waiting': '🔌 ' ~ name ~ ' plugged in', 'charging': '⚡ ' ~ name ~ ' charging', 'charged': '✅ ' ~ name ~ ' charged'}[phase] }}
-          message: >-
-            {% if phase == 'waiting' %}{{ ('Already at ' ~ soc ~ '%') if soc >= target - 1 else ('Waiting to charge · ' ~ soc ~ '% → ' ~ target ~ '%') }}{{ (' · ' ~ range_text) if range_text else '' }}
-            {%- elif phase == 'charging' %}{{ soc }}% → {{ target }}%{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ (' · ' ~ range_text) if range_text else '' }}
-            {%- else %}{{ soc }}%{{ (' · ' ~ range_text) if range_text else '' }} · unplug when you go{% endif %}
-          data:
-            tag: "{{ tags[phase] }}"
-            live_update: true
-            silent: "{{ phase != 'charged' or phase == prev or quiet }}"
-            progress: "{{ soc }}"
-            progress_max: "{{ [target, soc, 1] | max }}"
-            critical_text: "{{ soc }}%"
-            notification_icon: "{{ 'mdi:ev-plug-type2' if phase == 'waiting' else 'mdi:car-electric' }}"
-            notification_icon_color: "{{ '#FF9800' if phase == 'waiting' else '#4CAF50' }}"
-            progress_bar_color: "{{ '#FF9800' if phase == 'waiting' else '#4CAF50' }}"
-            url: "{{ url }}"
+      - alias: Show the current phase
+        if:
+          - condition: template
+            value_template: "{{ phase in tags }}"
+        then:
+          - variables:
+              range_text: "{{ (km ~ ' ' ~ km_unit) if km > 0 else '' }}"
+          - action: "{{ notify_action }}"
+            data:
+              title: >-
+                {{ {'waiting': '🔌 ' ~ name ~ ' plugged in', 'charging': '⚡ ' ~ name ~ ' charging', 'charged': '✅ ' ~ name ~ ' charged'}[phase] }}
+              message: >-
+                {% if phase == 'waiting' %}{{ ('Already at ' ~ soc ~ '%') if soc >= target - 1 else ('Waiting to charge · ' ~ soc ~ '% → ' ~ target ~ '%') }}{{ (' · ' ~ range_text) if range_text else '' }}
+                {%- elif phase == 'charging' %}{{ soc }}% → {{ target }}%{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ (' · ' ~ range_text) if range_text else '' }}
+                {%- else %}{{ soc }}%{{ (' · ' ~ range_text) if range_text else '' }} · unplug when you go{% endif %}
+              data:
+                tag: "{{ tags[phase] }}"
+                live_update: true
+                silent: "{{ phase != 'charged' or phase == prev or quiet }}"
+                progress: "{{ soc }}"
+                progress_max: "{{ [target, soc, 1] | max }}"
+                critical_text: "{{ soc }}%"
+                notification_icon: "{{ 'mdi:ev-plug-type2' if phase == 'waiting' else 'mdi:car-electric' }}"
+                notification_icon_color: "{{ '#FF9800' if phase == 'waiting' else '#4CAF50' }}"
+                progress_bar_color: "{{ '#FF9800' if phase == 'waiting' else '#4CAF50' }}"
+                url: "{{ url }}"
+    else:
+      - alias: Hidden on this phone → one normal notification when it finishes
+        if:
+          - condition: template
+            value_template: "{{ phase == 'charged' and prev != 'charged' }}"
+        then:
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              title: "✅ {{ name }} charged"
+              message: "{{ soc }}%{{ (' · ' ~ km ~ ' ' ~ km_unit) if km > 0 else '' }} · unplug when you go"
+              data: { tag: "{{ tag_base }}_hidden_done", url: "{{ url }}" }
+      - alias: The job is over → show cards again next time
+        if:
+          - condition: template
+            value_template: "{{ phase == 'none' }}"
+        then:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ hide_entity }}" }
   - alias: Remember the phase
     if:
       - condition: template
