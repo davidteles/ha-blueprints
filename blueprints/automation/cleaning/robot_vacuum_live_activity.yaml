@@ -89,6 +89,17 @@ blueprint:
       name: Open when tapped (optional)
       default: ""
       selector: { text: {} }
+    hide_switch:
+      name: '"Hide until done" switch (optional)'
+      description: >-
+        A toggle helper (input_boolean) with a button on the page the card
+        opens. Turning it on closes the card on this phone and stops its
+        updates; when the job finishes you get one normal notification
+        instead, and the switch turns itself off when the job is over. For a
+        per-phone choice, make one automation per phone, each with its own
+        notification action, phase helper and switch.
+      default: []
+      selector: { entity: { domain: input_boolean } }
     notify_action:
       name: Notification action
       description: e.g. notify.mobile_app_your_phone, or a notify group to reach several phones.
@@ -110,6 +121,8 @@ variables: &live_vars
   name: !input name
   url: !input url
   notify_action: !input notify_action
+  hide_entity: !input hide_switch
+  hidden: "{{ hide_entity not in ['', none, []] and is_state(hide_entity, 'on') }}"
   has_area: "{{ area_entity not in ['', none, []] }}"
   vac: "{{ states(vac_entity) }}"
   area: "{{ (states(area_entity) | float(0) | round(0) | int) if has_area else 0 }}"
@@ -168,6 +181,11 @@ triggers:
     entity_id: !input error_text
     not_to: [unknown, unavailable]
     id: problem
+  - alias: '"Hide until done" switched on'
+    trigger: state
+    entity_id: !input hide_switch
+    to: "on"
+    id: hide
 
 actions:
   - alias: >-
@@ -175,6 +193,20 @@ actions:
       when they were triggered, and several sensors changing in the same second
       each started their own card (duplicates on the phone).
     variables: *live_vars
+  - alias: '"Hide until done" switched on → close the card on this phone now'
+    if:
+      - condition: template
+        value_template: "{{ trigger.id == 'hide' }}"
+    then:
+      - repeat:
+          for_each: "{{ tags.values() | list }}"
+          sequence:
+            - action: "{{ notify_action }}"
+              continue_on_error: true
+              data:
+                message: clear_notification
+                data: { tag: "{{ repeat.item }}" }
+      - stop: Card hidden on this phone
   - alias: Phase changed → close the previous Live Activity
     if:
       - condition: template
@@ -185,71 +217,97 @@ actions:
         data:
           message: clear_notification
           data: { tag: "{{ tags[prev] }}" }
-  - choose:
-      - alias: Cleaning → start or update (on state changes, and every 2 m²)
-        conditions:
-          - condition: template
-            value_template: >-
-              {{ phase == 'cleaning' and (trigger.id in ['state', 'problem'] or prev != 'cleaning'
-                 or (trigger.id == 'area' and vac == 'cleaning' and area % 2 == 0
-                     and trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state)) }}
-        sequence:
-          - variables:
-              rate: "{{ (mins | float(0) / area) if area >= 3 else 1.0 }}"
-              left: >-
-                {{ ([((expected - area) * rate) | round(0) | int, 0] | max) if expected > 0 and has_area and vac == 'cleaning' else 0 }}
-              end_ts: "{{ (now().timestamp() + left * 60) | int if left > 0 else 0 }}"
-              head: >-
-                {{ {'cleaning': '🧹 ' ~ name ~ ' is cleaning', 'returning': '🏠 ' ~ name ~ ' is heading home',
-                    'paused': '⏸ ' ~ name ~ ' is paused', 'error': '⚠️ ' ~ name ~ ' needs help'}[vac] }}
-          - action: "{{ notify_action }}"
-            data:
-              title: "{{ head }}"
-              message: >-
-                {{ (problem[:1] | upper ~ problem[1:] ~ ' · ') if problem else '' }}{{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² · ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}{{ (' · ~' ~ left ~ ' min left') if left > 0 else '' }}
-              data:
-                tag: "{{ tags.cleaning }}"
-                live_update: true
-                silent: true
-                progress: "{{ area if expected > 0 else 0 }}"
-                progress_max: "{{ ([expected, area + 1] | max) if expected > 0 else 0 }}"
-                chronometer: "{{ end_ts > 0 }}"
-                when: "{{ end_ts }}"
-                critical_text: "{{ (area ~ ' m²') if has_area else (mins | float(0) | round(0) | int ~ ' min') }}"
-                notification_icon: mdi:robot-vacuum
-                notification_icon_color: "{{ '#F44336' if vac == 'error' else '#9C27B0' }}"
-                progress_bar_color: "#9C27B0"
-                url: "{{ url }}"
-      - alias: Just finished → learn the area, show "finished"
-        conditions:
+  - alias: Just finished → learn the area (also while the card is hidden)
+    if:
+      - condition: template
+        value_template: >-
+          {{ phase == 'done' and prev != 'done' and learned_entity not in ['', none, []] and has_area and area >= 3 }}
+    then:
+      - action: input_text.set_value
+        target: { entity_id: "{{ learned_entity }}" }
+        data:
+          value: >-
+            {% set n = dict(memory, **{key: area}) %}{% set j = n | to_json %}{{ j if j | count <= 255 else ({key: area} | to_json) }}
+  - alias: Show the card (skipped while "hide until done" is on)
+    if:
+      - condition: template
+        value_template: "{{ not hidden }}"
+    then:
+      - choose:
+          - alias: Cleaning → start or update (on state changes, and every 2 m²)
+            conditions:
+              - condition: template
+                value_template: >-
+                  {{ phase == 'cleaning' and (trigger.id in ['state', 'problem'] or prev != 'cleaning'
+                     or (trigger.id == 'area' and vac == 'cleaning' and area % 2 == 0
+                         and trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state)) }}
+            sequence:
+              - variables:
+                  rate: "{{ (mins | float(0) / area) if area >= 3 else 1.0 }}"
+                  left: >-
+                    {{ ([((expected - area) * rate) | round(0) | int, 0] | max) if expected > 0 and has_area and vac == 'cleaning' else 0 }}
+                  end_ts: "{{ (now().timestamp() + left * 60) | int if left > 0 else 0 }}"
+                  head: >-
+                    {{ {'cleaning': '🧹 ' ~ name ~ ' is cleaning', 'returning': '🏠 ' ~ name ~ ' is heading home',
+                        'paused': '⏸ ' ~ name ~ ' is paused', 'error': '⚠️ ' ~ name ~ ' needs help'}[vac] }}
+              - action: "{{ notify_action }}"
+                data:
+                  title: "{{ head }}"
+                  message: >-
+                    {{ (problem[:1] | upper ~ problem[1:] ~ ' · ') if problem else '' }}{{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² · ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}{{ (' · ~' ~ left ~ ' min left') if left > 0 else '' }}
+                  data:
+                    tag: "{{ tags.cleaning }}"
+                    live_update: true
+                    silent: true
+                    progress: "{{ area if expected > 0 else 0 }}"
+                    progress_max: "{{ ([expected, area + 1] | max) if expected > 0 else 0 }}"
+                    chronometer: "{{ end_ts > 0 }}"
+                    when: "{{ end_ts }}"
+                    critical_text: "{{ (area ~ ' m²') if has_area else (mins | float(0) | round(0) | int ~ ' min') }}"
+                    notification_icon: mdi:robot-vacuum
+                    notification_icon_color: "{{ '#F44336' if vac == 'error' else '#9C27B0' }}"
+                    progress_bar_color: "#9C27B0"
+                    url: "{{ url }}"
+          - alias: Just finished → show "finished"
+            conditions:
+              - condition: template
+                value_template: "{{ phase == 'done' and prev != 'done' }}"
+            sequence:
+              - action: "{{ notify_action }}"
+                data:
+                  title: "✅ {{ name }} finished"
+                  message: >-
+                    {{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² in ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}
+                  data:
+                    tag: "{{ tags.done }}"
+                    live_update: true
+                    silent: true
+                    progress: 1
+                    progress_max: 1
+                    critical_text: "{{ (area ~ ' m²') if has_area else 'Done' }}"
+                    notification_icon: mdi:robot-vacuum
+                    notification_icon_color: "#4CAF50"
+                    progress_bar_color: "#4CAF50"
+                    url: "{{ url }}"
+    else:
+      - alias: Hidden on this phone → one normal notification when it finishes
+        if:
           - condition: template
             value_template: "{{ phase == 'done' and prev != 'done' }}"
-        sequence:
-          - if:
-              - condition: template
-                value_template: "{{ learned_entity not in ['', none, []] and has_area and area >= 3 }}"
-            then:
-              - action: input_text.set_value
-                target: { entity_id: "{{ learned_entity }}" }
-                data:
-                  value: >-
-                    {% set n = dict(memory, **{key: area}) %}{% set j = n | to_json %}{{ j if j | count <= 255 else ({key: area} | to_json) }}
+        then:
           - action: "{{ notify_action }}"
+            continue_on_error: true
             data:
               title: "✅ {{ name }} finished"
-              message: >-
-                {{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² in ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}
-              data:
-                tag: "{{ tags.done }}"
-                live_update: true
-                silent: true
-                progress: 1
-                progress_max: 1
-                critical_text: "{{ (area ~ ' m²') if has_area else 'Done' }}"
-                notification_icon: mdi:robot-vacuum
-                notification_icon_color: "#4CAF50"
-                progress_bar_color: "#4CAF50"
-                url: "{{ url }}"
+              message: "{{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² in ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min"
+              data: { tag: "{{ tag_base }}_hidden_done", url: "{{ url }}" }
+      - alias: The job is over → show cards again next time
+        if:
+          - condition: template
+            value_template: "{{ phase == 'none' }}"
+        then:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ hide_entity }}" }
   - alias: Remember the phase
     if:
       - condition: template
