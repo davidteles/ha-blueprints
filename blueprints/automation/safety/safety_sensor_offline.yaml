@@ -4,6 +4,12 @@ blueprint:
     A leak, smoke, door or window sensor that is offline can't warn you. If one
     stays unavailable for a while you get a message, and another when it's back
     (only if it had really been gone for that long).
+
+
+    The message says **which integration** it belongs to, when it was last
+    heard, and whether the **whole integration** is down (most of its entities
+    offline: a cloud or hub problem) or **only this device** (for Zigbee, Z-Wave
+    or Matter: usually a weak signal or a flat battery).
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/safety/safety_sensor_offline.yaml
   input:
@@ -23,6 +29,29 @@ mode: queued
 
 variables:
   notify_action: !input notify_action
+  labels:
+    zha: Zigbee
+    zwave_js: Z-Wave
+    matter: Matter
+    mqtt: MQTT
+    homekit_controller: HomeKit
+    nest_protect: Nest Protect (Google cloud)
+    shelly: Shelly
+    esphome: ESPHome
+    tuya: Tuya (cloud)
+  # The integration's type, never its title (titles can contain account e-mails).
+  entry: "{{ config_entry_id(trigger.entity_id) or '' }}"
+  domain: "{{ config_entry_attr(entry, 'domain') if entry else '' }}"
+  via: "{{ labels.get(domain, domain | replace('_', ' ') | title) if domain else '' }}"
+  # Everything from the same integration entry (two Zigbee sticks stay apart).
+  siblings: >-
+    {%- set ns = namespace(e=[]) -%}
+    {%- if entry -%}{%- for s in states if config_entry_id(s.entity_id) == entry and s.domain not in ['update', 'button'] -%}
+    {%- set ns.e = ns.e + [s.entity_id] -%}{%- endfor -%}{%- endif -%}
+    {{ ns.e }}
+  down: "{{ siblings | select('is_state', 'unavailable') | list | count }}"
+  whole: "{{ siblings | count >= 4 and (down | int) >= (siblings | count) * 0.6 }}"
+  heard: "{{ as_local(trigger.from_state.last_reported).strftime('%H:%M') if trigger.id == 'offline' and trigger.from_state is not none else '' }}"
   wait_input: !input wait
   wait_s: >-
     {{ (wait_input.days | default(0)) * 86400 + (wait_input.hours | default(0)) * 3600
@@ -49,7 +78,15 @@ conditions:
 actions:
   - action: "{{ notify_action }}"
     data:
-      title: "🛡️ Safety sensor"
+      title: "{{ ('⚠️ ' ~ trigger.to_state.name ~ ' offline') if trigger.id == 'offline' else ('✅ ' ~ trigger.to_state.name ~ ' back') }}"
       message: >-
-        {% if trigger.id == 'offline' %}{{ trigger.to_state.name }} is offline. Its alerts won't reach you until it reconnects.{% else %}{{ trigger.to_state.name }} is back online.{% endif %}
+        {% if trigger.id == 'offline' -%}
+        {%- set head = [via, ('last heard ' ~ heard) if heard else ''] | select | join(', ') -%}
+        {{ (head[:1] | upper ~ head[1:]) if head else 'Offline' }}. Its alerts won't reach you until it reconnects.
+        {%- if whole %} {{ down }} of {{ siblings | count }} {{ via }} entities are offline too, so the {{ via }} integration (or its cloud or hub) is the problem, not this sensor.
+        {%- elif domain in ['zha', 'zwave_js', 'matter'] %} Only this device: usually a weak {{ via }} signal (a mains-powered {{ via }} device nearby relays it) or a flat battery.
+        {%- elif via %} Only this device on {{ via }}: check its power and connection.{% endif %}
+        {%- else -%}
+        Back online{{ (' (' ~ via ~ ')') if via }}; its alerts work again.
+        {%- endif %}
       data: { tag: "offline-{{ trigger.entity_id }}" }
