@@ -365,7 +365,7 @@ actions:
               - action: "{{ notify_action }}"
                 data:
                   title: "⏰ {{ name }} programmed"
-                  message: "{{ ('Will finish at ' ~ end_hm) if end_ts > now_ts else 'Waiting to start' }}"
+                  message: "{{ 'Delayed start · it starts by itself' if end_ts > now_ts else 'Waiting to start' }}"
                   data:
                     tag: "{{ tags.programmed }}"
                     live_update: true
@@ -391,7 +391,7 @@ actions:
                 data:
                   title: "{{ name }} · {{ stage }}"
                   message: >-
-                    {{ (left ~ ' min left · done around ' ~ end_hm) if end_ts > now_ts else 'Running' }}
+                    {{ ('Done around ' ~ end_hm) if end_ts > now_ts else 'Running' }}
                   data:
                     tag: "{{ tags.running }}"
                     live_update: true
