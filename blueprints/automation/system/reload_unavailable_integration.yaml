@@ -62,7 +62,7 @@ actions:
         - action: "{{ notify_action }}"
           data:
             title: "🔄 Reloading {{ repeat.item }}"
-            message: "{{ before }} of {{ ents | count }} entities have been unavailable for 30 minutes."
+            message: "{{ before }} of {{ ents | count }} {{ 'entity' if ents | count == 1 else 'entities' }} {{ 'has' if before | int == 1 else 'have' }} been unavailable for 30 minutes."
             data: { tag: "watchdog-{{ repeat.item }}" }
         - action: homeassistant.reload_config_entry
           target: { entity_id: "{{ ents }}" }
@@ -78,5 +78,5 @@ actions:
           data:
             title: "{{ '✅ ' ~ repeat.item ~ ' is back' if (after | int) / (ents | count) * 100 <= share | float else '⚠️ ' ~ repeat.item ~ ' is still down' }}"
             message: >-
-              {{ after }} of {{ ents | count }} entities still unavailable{{ '' if (after | int) / (ents | count) * 100 <= share | float else ' — check the integration or the cloud service' }}.
+              {{ after }} of {{ ents | count }} {{ 'entity' if ents | count == 1 else 'entities' }} still unavailable{{ '' if (after | int) / (ents | count) * 100 <= share | float else ' — check the integration or the cloud service' }}.
             data: { tag: "watchdog-{{ repeat.item }}" }
