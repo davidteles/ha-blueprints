@@ -33,3 +33,8 @@ No personal data, keys, tokens, codes or private hostnames, ever. Screenshots ar
 ## Checks
 
 `python tools/check_blueprints.py` (needs `pyyaml`) runs on every pull request: each blueprint must be valid YAML, have a name, description and `source_url` pointing at its own file, and declare every `!input` it uses. Test new blueprints in Home Assistant too, and say how in the pull request.
+
+## Scenario tests
+
+`pip install -r requirements_test.txt && pytest` (Python 3.13) runs the real blueprint files in a test Home Assistant: devices are plain states, every service call and notification is recorded, and timers are moved forward. The three *Start here* blueprints are covered: normal run, manual override, unavailable input, duplicate events and the cases that make each one different. Add a scenario when you change one of them, or when a bug report shows a case that isn't covered.
+

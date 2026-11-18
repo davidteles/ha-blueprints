@@ -19,3 +19,14 @@ jobs:
       - run: pip install pyyaml
       - name: Check every blueprint
         run: python tools/check_blueprints.py
+
+  scenarios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements_test.txt
+      - name: Scenario tests (the real blueprints in a test Home Assistant)
+        run: pytest -q
