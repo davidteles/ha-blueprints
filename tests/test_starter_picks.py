@@ -152,6 +152,7 @@ async def test_laundry_remind_me_later(hass, laundry, later):
     await hass.async_block_till_done()
     hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_SNOOZE"})
     await later(minutes=31)
+    await later(seconds=1)
     assert len(laundry) == 2 and "still waiting" in laundry[-1].data["title"]
 
 

@@ -162,6 +162,13 @@ actions:
         sequence:
           - action: input_boolean.turn_off
             target: { entity_id: "{{ waiting_entity }}" }
+          # Clear it here too: Home Assistant doesn't let an automation trigger
+          # itself, so the "turned off anywhere" branch below won't run for this.
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data:
+              message: clear_notification
+              data: { tag: laundry }
       - alias: Toggle turned off anywhere → remove the phone notification
         conditions:
           - condition: trigger

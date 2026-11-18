@@ -7,6 +7,7 @@ each test decides what the "device" does next.
 """
 from __future__ import annotations
 
+import asyncio
 import shutil
 from datetime import timedelta
 from pathlib import Path
@@ -58,6 +59,16 @@ def notify(hass: HomeAssistant) -> list[ServiceCall]:
     return async_mock_service(hass, "notify", "phone")
 
 
+async def settle(hass: HomeAssistant, rounds: int = 30) -> None:
+    """Let pending events and their listeners run, without waiting for long delays.
+
+    hass.async_block_till_done() would wait for an automation that is sitting in
+    a 30-minute delay, which never ends while the clock is frozen.
+    """
+    for _ in range(rounds):
+        await asyncio.sleep(0)
+
+
 @pytest.fixture
 def later(hass: HomeAssistant):
     """Move Home Assistant's timers forward ('for:' triggers, delays) and let them run."""
@@ -65,8 +76,8 @@ def later(hass: HomeAssistant):
 
     async def _later(**delta) -> None:
         nonlocal elapsed
-        await hass.async_block_till_done()  # let state changes start their timers first
+        await settle(hass)  # let state changes start their timers first
         elapsed += timedelta(**delta)
         async_fire_time_changed(hass, dt_util.utcnow() + elapsed)
-        await hass.async_block_till_done()
+        await settle(hass)
     return _later
