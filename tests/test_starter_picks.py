@@ -223,3 +223,59 @@ async def test_ev_unavailable_charging_state_is_ignored(hass, ev, later):
     hass.states.async_set(CHARGING, "unavailable")
     await later(seconds=5)
     assert not ev, "a sensor dropping out sends nothing"
+
+
+# ---------------------------------------------------------------- safety sensor offline
+
+from pytest_homeassistant_custom_component.common import MockConfigEntry  # noqa: E402
+
+from homeassistant.helpers import entity_registry as er  # noqa: E402
+
+
+@pytest.fixture
+async def offline(hass: HomeAssistant, load_blueprint, notify):
+    """Five Zigbee sensors registered to one (fake) Zigbee integration."""
+    entry = MockConfigEntry(domain="zha", title="Coordinator for alex@example.com")
+    entry.add_to_hass(hass)
+    reg = er.async_get(hass)
+    ids = []
+    for i in range(5):
+        ent = reg.async_get_or_create("binary_sensor", "zha", f"leak{i}", config_entry=entry,
+                                      suggested_object_id=f"leak_{i}", original_name=f"Leak {i}")
+        hass.states.async_set(ent.entity_id, "off", {"friendly_name": f"Leak {i}"})
+        ids.append(ent.entity_id)
+    await load_blueprint("safety/safety_sensor_offline.yaml", {"sensors": ids, "notify_action": "notify.phone"})
+    return ids
+
+
+async def test_offline_one_zigbee_device(hass, offline, notify, later):
+    hass.states.async_set(offline[0], "unavailable", {"friendly_name": "Leak 0"})
+    await later(hours=1, minutes=1)
+    msg, title = notify[-1].data["message"], notify[-1].data["title"]
+    assert title == "⚠️ Leak 0 offline"
+    assert msg.startswith("Zigbee, last heard ") and "Only this device: usually a weak Zigbee signal" in msg
+    assert "example.com" not in msg + title, "never the integration's title (it can hold an e-mail)"
+
+
+async def test_offline_whole_integration(hass, offline, notify, later):
+    for e in offline[:4]:
+        hass.states.async_set(e, "unavailable", {"friendly_name": e[-6:]})
+    await later(hours=1, minutes=1)
+    msgs = [c.data["message"] for c in notify]
+    assert any("4 of 5 Zigbee entities are offline too" in m for m in msgs), msgs
+
+
+async def test_back_online_after_a_real_outage(hass, offline, notify, later):
+    hass.states.async_set(offline[0], "unavailable", {"friendly_name": "Leak 0"})
+    await later(hours=1, minutes=1)
+    hass.states.async_set(offline[0], "off", {"friendly_name": "Leak 0"})
+    await later(seconds=1)
+    assert notify[-1].data["title"] == "✅ Leak 0 back" and "(Zigbee)" in notify[-1].data["message"]
+
+
+async def test_short_blip_sends_nothing(hass, offline, notify, later):
+    hass.states.async_set(offline[0], "unavailable", {"friendly_name": "Leak 0"})
+    await later(minutes=5)
+    hass.states.async_set(offline[0], "off", {"friendly_name": "Leak 0"})
+    await later(seconds=1)
+    assert not notify

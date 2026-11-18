@@ -70,14 +70,11 @@ async def settle(hass: HomeAssistant, rounds: int = 30) -> None:
 
 
 @pytest.fixture
-def later(hass: HomeAssistant):
-    """Move Home Assistant's timers forward ('for:' triggers, delays) and let them run."""
-    elapsed = timedelta()
-
+def later(hass: HomeAssistant, freezer):
+    """Move the clock forward (now() and timers: 'for:' triggers, delays) and let things run."""
     async def _later(**delta) -> None:
-        nonlocal elapsed
         await settle(hass)  # let state changes start their timers first
-        elapsed += timedelta(**delta)
-        async_fire_time_changed(hass, dt_util.utcnow() + elapsed)
+        freezer.tick(timedelta(**delta))
+        async_fire_time_changed(hass, dt_util.utcnow())
         await settle(hass)
     return _later
