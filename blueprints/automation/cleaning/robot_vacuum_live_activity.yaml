@@ -254,7 +254,9 @@ actions:
                 data:
                   title: "{{ head }}"
                   message: >-
-                    {{ (problem[:1] | upper ~ problem[1:] ~ ' · ') if problem else '' }}{{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² · ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}{{ (' · ~' ~ left ~ ' min left') if left > 0 else '' }}
+                    {#- The side text already shows m² (or minutes without an area sensor): don't repeat it here. -#}
+                    {%- set p = (problem[:1] | upper ~ problem[1:]) if problem else '' -%}
+                    {{ [p, job, ((mins | float(0) | round(0) | int) ~ ' min') if has_area else '', ('🔋 ' ~ batt ~ '%') if batt >= 0 else '', ('~' ~ left ~ ' min left') if left > 0 else ''] | select | join(' · ') or 'Cleaning' }}
                   data:
                     tag: "{{ tags.cleaning }}"
                     live_update: true
@@ -284,7 +286,7 @@ actions:
                     silent: true
                     progress: 1
                     progress_max: 1
-                    critical_text: "{{ (area ~ ' m²') if has_area else 'Done' }}"
+                    critical_text: Done
                     notification_icon: mdi:robot-vacuum
                     notification_icon_color: "#4CAF50"
                     progress_bar_color: "#4CAF50"
