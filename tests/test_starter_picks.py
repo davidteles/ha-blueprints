@@ -108,7 +108,10 @@ async def test_laundry_finished_then_done(hass, laundry):
     assert len(laundry) == 1 and laundry[0].data["data"]["tag"] == "laundry"
 
     hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_DONE"})
-    await hass.async_block_till_done()
+    # The toggle turning off starts a second run of the same automation (the
+    # "turned off anywhere" branch), which clears the phone a moment later.
+    for _ in range(3):
+        await hass.async_block_till_done()
     assert hass.states.get(WAITING).state == "off"
     assert _sent(laundry)[-1] == "clear_notification", "the phone notification is removed too"
 
