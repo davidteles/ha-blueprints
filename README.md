@@ -224,6 +224,10 @@ content: >-
   {% endfor %}
 ```
 
+## Remove one
+
+Delete the automation made from it (*Settings → Automations & scenes*), then the blueprint itself under *Blueprints* and any helper you created only for it. Nothing else is left behind.
+
 ## Notifications
 
 The newer blueprints ask for a **notification action** such as `notify.mobile_app_your_phone`. To reach several phones, make a [notify group](https://www.home-assistant.io/integrations/group/#notify-groups) and use `notify.your_group`. Buttons in notifications (*Done*, *Unlock*…) need the Home Assistant Companion app; press and hold the notification to see them.
@@ -231,6 +235,10 @@ The newer blueprints ask for a **notification action** such as `notify.mobile_ap
 ## How these are tested
 
 Every blueprint is imported into a real Home Assistant before it lands here, then driven with test helpers and simulated sensors through each path (finished → reminder → button → cleared, and so on), with notifications going to Home Assistant's own notification list.
+
+The three starter picks and the offline alert also have **automated scenario tests** (`pytest`, in [tests/](tests/)) that run the real blueprint files on every change: the normal run, a manual override, an unavailable sensor, a repeated event and a short blip that must stay quiet. Run them with Python 3.13: `pip install -r requirements_test.txt && pytest`. What only a phone or a real device can show stays on the manual checks above.
+
+In daily use on Home Assistant **2026.11.2**; the automated tests run on 2026.2.
 
 ## Design rules these follow
 
