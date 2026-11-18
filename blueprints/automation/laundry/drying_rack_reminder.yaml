@@ -1,5 +1,5 @@
 blueprint:
-  name: Drying-rack reminder
+  name: Drying-rack reminder (indoors or outside, with rain warning)
   description: >-
     Once the laundry is out of the machine and on the drying rack, remind
     someone to put it away: the same evening if it was hung in the morning,
@@ -8,6 +8,23 @@ blueprint:
 
     Works together with "Laundry done — stays waiting until it's emptied": when
     its "laundry waiting" toggle turns off, the laundry is on the rack.
+
+
+    **Optional — indoors or outside:** add a Dropdown "Laundry drying place"
+    with the options *Not set*, *Indoors* and *Outside*. Dashboard buttons
+    set it to Indoors or Outside and then turn the "laundry waiting" toggle
+    off. If the laundry is hung without a choice, it counts as indoors and the
+    phones are asked **Indoors / Outside**.
+
+    - **Indoors:** a dehumidifier (or fan, or plug) is switched on if it was
+      off. Its mode is left alone.
+
+    - **Outside:** while it dries, the rain gauge and the hourly forecast are
+      checked every 5 minutes. If it's raining, or rain is due within 30
+      minutes, the phones that are at home get one time-sensitive warning
+      with an **It's indoors** button. That button switches to indoors.
+      If nobody is home, every phone gets it. A "rain alert" toggle stays on
+      meanwhile, so a dashboard can show it.
 
 
     **Create first:** a Toggle "Laundry on the drying rack" and a Date and time
@@ -44,20 +61,110 @@ blueprint:
       selector: { number: { min: 0, max: 23, unit_of_measurement: h } }
     notify_action:
       name: Notification action
-      description: e.g. notify.mobile_app_your_phone, or a notify group.
+      description: e.g. notify.mobile_app_your_phone, or a notify group. Used for everything when no phones are picked below.
       default: notify.notify
       selector: { text: {} }
+    place_section:
+      name: Indoors or outside (optional)
+      icon: mdi:weather-partly-rainy
+      collapsed: true
+      input:
+        place:
+          name: '"Laundry drying place" dropdown'
+          description: >-
+            Options *Not set*, *Indoors*, *Outside* (the first one is what it goes back
+            to after the laundry is put away). Leave empty to skip all of this.
+          default: []
+          selector: { entity: { domain: input_select } }
+        indoor_option:
+          name: Dropdown option meaning indoors
+          default: Indoors
+          selector: { text: {} }
+        outside_option:
+          name: Dropdown option meaning outside
+          default: Outside
+          selector: { text: {} }
+        dehumidifier:
+          name: Switch on when it's indoors (optional)
+          description: A dehumidifier, fan or plug. It's only switched on if it's off; its mode is not changed.
+          default: []
+          selector: { entity: { domain: [humidifier, fan, switch] } }
+        rain_alert:
+          name: '"Laundry rain alert" toggle'
+          description: Needed for the rain warning. It's on while rain is coming and the laundry is outside — handy for a dashboard card.
+          default: []
+          selector: { entity: { domain: input_boolean } }
+        rain_sensor:
+          name: Rain sensor (optional)
+          description: A rain gauge (raining when above 0) or a binary rain sensor (raining when on).
+          default: []
+          selector: { entity: { domain: [sensor, binary_sensor] } }
+        weather:
+          name: Weather forecast (optional)
+          description: Its hourly forecast is used to warn before the rain starts.
+          default: []
+          selector: { entity: { domain: weather } }
+        warn_minutes:
+          name: Warn this long before forecast rain
+          default: 30
+          selector: { number: { min: 5, max: 120, step: 5, unit_of_measurement: min } }
+        phones:
+          name: Phones (optional)
+          description: >-
+            Companion-app phones. The rain warning and the "where is it drying?"
+            question go to the ones that are at home (all of them if nobody is). Without
+            phones, the notification action above is used.
+          default: []
+          selector: { device: { integration: mobile_app, multiple: true } }
 
 mode: queued
+max: 10
 
 variables:
   on_rack_entity: !input on_rack
+  waiting_entity: !input waiting
   reminder_entity: !input reminder_at
   hung_entity: !input hung_at
   has_hung: "{{ hung_entity not in ['', none, []] }}"
   reminder_time: !input reminder_time
   cutoff: !input same_day_before
   notify_action: !input notify_action
+  place_entity: !input place
+  has_place: "{{ place_entity not in ['', none, []] }}"
+  indoor: !input indoor_option
+  outside: !input outside_option
+  dehumidifier: !input dehumidifier
+  alert_entity: !input rain_alert
+  has_alert: "{{ alert_entity not in ['', none, []] }}"
+  rain_sensor: !input rain_sensor
+  weather_entity: !input weather
+  warn_minutes: !input warn_minutes
+  phones: !input phones
+  phone_list: "{{ [phones] if phones is string and phones else (phones if phones is iterable and phones is not string else []) }}"
+  all_targets: >-
+    {{ phone_list | map('device_attr', 'name') | reject('none') | map('slugify')
+       | map('regex_replace', '^', 'notify.mobile_app_') | list or [notify_action] }}
+  home_targets: >-
+    {% set ns = namespace(l=[]) %}
+    {% for d in phone_list %}
+      {% set t = device_entities(d) | select('match', 'device_tracker[.]') | list %}
+      {% if t and is_state(t[0], 'home') and device_attr(d, 'name') %}
+        {% set ns.l = ns.l + ['notify.mobile_app_' ~ (device_attr(d, 'name') | slugify)] %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.l or all_targets }}
+  place_now: "{{ states(place_entity) if has_place else '' }}"
+  # Phone buttons answered with the same action ids whichever phone pressed them.
+  place_buttons:
+    - { action: LAUNDRY_INDOORS, title: Indoors }
+    - { action: LAUNDRY_OUTSIDE, title: Outside }
+
+conditions:
+  - alias: The 5-minute rain check only runs while laundry is outside
+    condition: template
+    value_template: >-
+      {{ trigger.id != 'rain_check' or (has_place and has_alert and is_state(place_entity, outside)
+         and is_state(on_rack_entity, 'on')) }}
 
 triggers:
   - trigger: state
@@ -77,6 +184,28 @@ triggers:
     from: "on"
     to: "off"
     id: put_away
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LAUNDRY_INDOORS }
+    id: say_indoors
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LAUNDRY_BROUGHT_IN }
+    id: say_indoors
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data: { action: LAUNDRY_OUTSIDE }
+    id: say_outside
+  - trigger: state
+    entity_id: !input place
+    not_from: [unavailable, unknown]
+    id: place_changed
+  - trigger: time_pattern
+    minutes: /5
+    id: rain_check
+  - trigger: state
+    entity_id: !input rain_sensor
+    id: rain_check
 
 actions:
   - choose:
@@ -98,6 +227,27 @@ actions:
               datetime: >-
                 {% set at = today_at(reminder_time) %}
                 {{ (at if now().hour < cutoff | int else at + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S') }}
+          - if:
+              - condition: template
+                value_template: "{{ has_place and place_now not in [indoor, outside] }}"
+            then:
+              - alias: Hung without a choice → indoors, and ask
+                action: input_select.select_option
+                target: { entity_id: "{{ place_entity }}" }
+                data: { option: "{{ indoor }}" }
+                continue_on_error: true
+              - repeat:
+                  for_each: "{{ home_targets }}"
+                  sequence:
+                    - action: "{{ repeat.item }}"
+                      continue_on_error: true
+                      data:
+                        title: "👕 Laundry hung — where is it drying?"
+                        message: >-
+                          Counted as indoors{{ ', so the dehumidifier is on' if dehumidifier not in ['', none, []] else '' }}.
+                          If it's outside, you'll be warned when rain is coming.
+                          👆 Press and hold for: Indoors · Outside
+                        data: { tag: laundry-place, group: laundry, actions: "{{ place_buttons }}" }
       - alias: Reminder time
         conditions:
           - condition: trigger
@@ -113,7 +263,7 @@ actions:
             data:
               title: "👕 Laundry on the drying rack"
               message: >-
-                Drying since {{ as_datetime(since).strftime('%a %H:%M') }} — time to put it away.
+                Drying{{ ' outside' if has_place and place_now == outside else '' }} since {{ as_datetime(since).strftime('%a %H:%M') }} — time to put it away.
                 👆 Press and hold for: Put away
               data:
                 tag: laundry-rack
@@ -129,3 +279,144 @@ actions:
             data:
               message: clear_notification
               data: { tag: laundry-rack }
+          - if:
+              - condition: template
+                value_template: "{{ has_alert and is_state(alert_entity, 'on') }}"
+            then:
+              - action: input_boolean.turn_off
+                target: { entity_id: "{{ alert_entity }}" }
+          - if:
+              - condition: template
+                value_template: "{{ has_place and is_state(waiting_entity, 'off') }}"
+            then:
+              - alias: Back to the first option ("Not set") for the next wash
+                variables:
+                  first: "{{ (state_attr(place_entity, 'options') or [''])[0] }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ first not in ['', indoor, outside] }}"
+                then:
+                  - action: input_select.select_option
+                    target: { entity_id: "{{ place_entity }}" }
+                    data: { option: "{{ first }}" }
+          - repeat:
+              for_each: "{{ all_targets }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  continue_on_error: true
+                  data: { message: clear_notification, data: { tag: laundry-rain } }
+      - alias: Phone answer → set the dropdown
+        conditions:
+          - condition: trigger
+            id: [say_indoors, say_outside]
+          - condition: template
+            value_template: "{{ has_place }}"
+        sequence:
+          - action: input_select.select_option
+            target: { entity_id: "{{ place_entity }}" }
+            data: { option: "{{ indoor if trigger.id == 'say_indoors' else outside }}" }
+          - repeat:
+              for_each: "{{ all_targets }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  continue_on_error: true
+                  data: { message: clear_notification, data: { tag: laundry-place } }
+
+  - alias: Indoors while on the rack → dehumidifier on, rain alert off
+    if:
+      - condition: template
+        value_template: >-
+          {{ has_place and is_state(on_rack_entity, 'on') and is_state(place_entity, indoor)
+             and (trigger.id == 'hung'
+                  or (trigger.id == 'place_changed' and trigger.from_state.state == outside)) }}
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ dehumidifier not in ['', none, []] and is_state(dehumidifier, 'off') }}"
+        then:
+          - action: homeassistant.turn_on
+            target: { entity_id: "{{ dehumidifier }}" }
+      - if:
+          - condition: template
+            value_template: "{{ has_alert and is_state(alert_entity, 'on') }}"
+        then:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ alert_entity }}" }
+          - repeat:
+              for_each: "{{ all_targets }}"
+              sequence:
+                - action: "{{ repeat.item }}"
+                  continue_on_error: true
+                  data: { message: clear_notification, data: { tag: laundry-rain } }
+
+  - alias: Outside → rain watch
+    if:
+      - condition: template
+        value_template: >-
+          {{ has_place and has_alert and is_state(place_entity, outside) and is_state(on_rack_entity, 'on')
+             and trigger.id in ['hung', 'rain_check', 'place_changed']
+             and (rain_sensor not in ['', none, []] or weather_entity not in ['', none, []]) }}
+    then:
+      - variables:
+          raining: >-
+            {% if rain_sensor in ['', none, []] %}false
+            {% elif rain_sensor.startswith('binary_sensor.') %}{{ is_state(rain_sensor, 'on') }}
+            {% else %}{{ states(rain_sensor) | float(0) > 0 }}{% endif %}
+          fc: {}
+      - if:
+          - condition: template
+            value_template: "{{ weather_entity not in ['', none, []] }}"
+        then:
+          - action: weather.get_forecasts
+            target: { entity_id: "{{ weather_entity }}" }
+            data: { type: hourly }
+            response_variable: fc
+            continue_on_error: true
+      - variables:
+          rain_at: >-
+            {%- set ns = namespace(t='') -%}
+            {%- for f in (fc[weather_entity].forecast if fc and weather_entity in fc else []) if not ns.t -%}
+              {%- set dt = as_local(as_datetime(f.datetime)) -%}
+              {%- if dt <= now() + timedelta(minutes=warn_minutes | int) and dt + timedelta(hours=1) > now()
+                    and (f.condition in ['rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail']
+                         or (f.precipitation_probability | default(0) | float(0)) >= 60) -%}
+                {%- set ns.t = 'now' if dt <= now() else dt.strftime('%H:%M') -%}
+              {%- endif -%}
+            {%- endfor -%}{{ ns.t }}
+          when: "{{ 'now' if raining or rain_at == 'now' else 'around ' ~ rain_at }}"
+      - choose:
+          - alias: Rain now or soon → warn the phones at home, once
+            conditions:
+              - condition: template
+                value_template: "{{ (raining or rain_at != '') and is_state(alert_entity, 'off') }}"
+            sequence:
+              - action: input_boolean.turn_on
+                target: { entity_id: "{{ alert_entity }}" }
+              - repeat:
+                  for_each: "{{ home_targets }}"
+                  sequence:
+                    - action: "{{ repeat.item }}"
+                      continue_on_error: true
+                      data:
+                        title: "☔ Rain {{ when }} — the laundry is outside"
+                        message: >-
+                          Bring it in, then tap It's indoors.
+                          👆 Press and hold for: It's indoors
+                        data:
+                          tag: laundry-rain
+                          group: laundry
+                          push: { interruption-level: time-sensitive }
+                          actions: [{ action: LAUNDRY_BROUGHT_IN, title: "It's indoors" }]
+          - alias: Dry again and nothing in the forecast → stand down
+            conditions:
+              - condition: template
+                value_template: "{{ not raining and rain_at == '' and is_state(alert_entity, 'on') }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target: { entity_id: "{{ alert_entity }}" }
+              - repeat:
+                  for_each: "{{ all_targets }}"
+                  sequence:
+                    - action: "{{ repeat.item }}"
+                      continue_on_error: true
+                      data: { message: clear_notification, data: { tag: laundry-rain } }
