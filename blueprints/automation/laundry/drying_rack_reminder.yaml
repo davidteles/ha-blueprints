@@ -11,10 +11,13 @@ blueprint:
 
 
     **Optional — indoors or outside:** add a Dropdown "Laundry drying place"
-    with the options *Not set*, *Indoors* and *Outside*. Dashboard buttons
-    set it to Indoors or Outside and then turn the "laundry waiting" toggle
-    off. If the laundry is hung without a choice, it counts as indoors and the
-    phones are asked **Indoors / Outside**.
+    with the options *Not set*, *Indoors*, *Outside* and *Not hung*. A person
+    chooses with the "Laundry done" buttons, the "Laundry hung" script or a
+    dashboard. A recommendation (see "Laundry drying advice") never sets it.
+    If the laundry is taken out without a choice, by default nothing is
+    switched on: the phones at home are asked **Indoors / Outside**, and
+    *Indoors* starts the dehumidifier once someone confirms. *Not hung* (a
+    drum clean, or a washer-dryer that dried it) puts nothing on the rack.
 
     - **Indoors:** a dehumidifier (or fan, or plug) is switched on if it was
       off. Its mode is left alone.
@@ -84,6 +87,22 @@ blueprint:
           name: Dropdown option meaning outside
           default: Outside
           selector: { text: {} }
+        not_hung_option:
+          name: Dropdown option meaning "nothing hung"
+          description: Machine care, or the laundry came out dry. Nothing goes on the rack.
+          default: Not hung
+          selector: { text: {} }
+        no_choice:
+          name: Taken out without a choice
+          description: >-
+            Wait for a person (nothing is switched on until someone chooses), or count
+            it as indoors straight away (how v1.9.0 worked).
+          default: wait
+          selector:
+            select:
+              options:
+                - { value: wait, label: Wait for a person }
+                - { value: indoors, label: Count it as indoors }
         dehumidifier:
           name: Switch on when it's indoors (optional)
           description: A dehumidifier, fan or plug. It's only switched on if it's off; its mode is not changed.
@@ -133,6 +152,8 @@ variables:
   has_place: "{{ place_entity not in ['', none, []] }}"
   indoor: !input indoor_option
   outside: !input outside_option
+  not_hung: !input not_hung_option
+  no_choice: !input no_choice
   dehumidifier: !input dehumidifier
   alert_entity: !input rain_alert
   has_alert: "{{ alert_entity not in ['', none, []] }}"
@@ -172,6 +193,11 @@ triggers:
     from: "on"
     to: "off"
     id: hung
+  - trigger: state
+    entity_id: !input waiting
+    from: "off"
+    to: "on"
+    id: new_load
   - trigger: time
     at: !input reminder_at
     id: due
@@ -209,6 +235,38 @@ triggers:
 
 actions:
   - choose:
+      - alias: Taken out but not hung (machine care, or it came out dry) → nothing on the rack
+        conditions:
+          - condition: trigger
+            id: hung
+          - condition: template
+            value_template: "{{ has_place and is_state(place_entity, not_hung) }}"
+        sequence:
+          - variables:
+              first: "{{ (state_attr(place_entity, 'options') or [''])[0] }}"
+          - if:
+              - condition: template
+                value_template: "{{ first not in ['', indoor, outside, not_hung] }}"
+            then:
+              - action: input_select.select_option
+                target: { entity_id: "{{ place_entity }}" }
+                data: { option: "{{ first }}" }
+      - alias: New wash done, rack empty → the next place isn't chosen yet
+        conditions:
+          - condition: trigger
+            id: new_load
+          - condition: template
+            value_template: "{{ has_place and is_state(on_rack_entity, 'off') }}"
+        sequence:
+          - variables:
+              first: "{{ (state_attr(place_entity, 'options') or [''])[0] }}"
+          - if:
+              - condition: template
+                value_template: "{{ first not in ['', indoor, outside, not_hung] }}"
+            then:
+              - action: input_select.select_option
+                target: { entity_id: "{{ place_entity }}" }
+                data: { option: "{{ first }}" }
       - alias: Laundry hung → schedule the reminder
         conditions: [{ condition: trigger, id: hung }]
         sequence:
@@ -231,11 +289,15 @@ actions:
               - condition: template
                 value_template: "{{ has_place and place_now not in [indoor, outside] }}"
             then:
-              - alias: Hung without a choice → indoors, and ask
-                action: input_select.select_option
-                target: { entity_id: "{{ place_entity }}" }
-                data: { option: "{{ indoor }}" }
-                continue_on_error: true
+              - if:
+                  - condition: template
+                    value_template: "{{ no_choice == 'indoors' }}"
+                then:
+                  - alias: Count it as indoors straight away (v1.9.0 behaviour)
+                    action: input_select.select_option
+                    target: { entity_id: "{{ place_entity }}" }
+                    data: { option: "{{ indoor }}" }
+                    continue_on_error: true
               - repeat:
                   for_each: "{{ home_targets }}"
                   sequence:
@@ -244,8 +306,9 @@ actions:
                       data:
                         title: "👕 Laundry hung — where is it drying?"
                         message: >-
-                          Counted as indoors{{ ', so the dehumidifier is on' if dehumidifier not in ['', none, []] else '' }}.
-                          If it's outside, you'll be warned when rain is coming.
+                          {% if no_choice == 'indoors' %}Counted as indoors{{ ', so the dehumidifier is on' if dehumidifier not in ['', none, []] else '' }}.
+                          If it's outside, you'll be warned when rain is coming.{% else %}Choose so the right thing happens:
+                          indoors {{ 'switches the dehumidifier on' if dehumidifier not in ['', none, []] else 'is noted' }}, outside watches for rain.{% endif %}
                           👆 Press and hold for: Indoors · Outside
                         data: { tag: laundry-place, group: laundry, actions: "{{ place_buttons }}" }
       - alias: Reminder time
@@ -327,8 +390,8 @@ actions:
       - condition: template
         value_template: >-
           {{ has_place and is_state(on_rack_entity, 'on') and is_state(place_entity, indoor)
-             and (trigger.id == 'hung'
-                  or (trigger.id == 'place_changed' and trigger.from_state.state == outside)) }}
+             and ((trigger.id == 'hung' and place_now == indoor)
+                  or (trigger.id == 'place_changed' and trigger.from_state.state != indoor)) }}
     then:
       - if:
           - condition: template

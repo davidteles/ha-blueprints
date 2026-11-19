@@ -25,10 +25,15 @@ def _phone(hass, entry, name, tracker_state):
 
 
 @pytest.fixture
-async def rack(hass: HomeAssistant, load_blueprint, helpers, notify):
+def rack_inputs():
+    return {}
+
+
+@pytest.fixture
+async def rack(hass: HomeAssistant, load_blueprint, helpers, notify, rack_inputs):
     await helpers(booleans=["laundry_waiting", "on_rack", "rain_alert"], datetimes=["reminder_at", "hung_at"])
     assert await async_setup_component(hass, "input_select", {"input_select": {
-        "drying_place": {"options": ["Not set", "Indoors", "Outside"]}}})
+        "drying_place": {"options": ["Not set", "Indoors", "Outside", "Not hung"]}}})
     await hass.services.async_call("input_boolean", "turn_on", {"entity_id": WAITING}, blocking=True)
     hass.states.async_set(DEHUM, "off")
     hass.states.async_set(RAIN, "0")
@@ -57,7 +62,7 @@ async def rack(hass: HomeAssistant, load_blueprint, helpers, notify):
         "waiting": WAITING, "on_rack": ON_RACK, "reminder_at": "input_datetime.reminder_at",
         "hung_at": "input_datetime.hung_at", "notify_action": "notify.phone",
         "place": PLACE, "dehumidifier": DEHUM, "rain_alert": ALERT, "rain_sensor": RAIN,
-        "weather": WEATHER, "phones": [alex, sam]})
+        "weather": WEATHER, "phones": [alex, sam], **rack_inputs})
     return calls
 
 
@@ -86,16 +91,54 @@ async def test_dehumidifier_already_on_is_left_alone(hass, rack):
     assert not rack["dehum_on"]
 
 
-async def test_hung_without_a_choice_counts_as_indoors_and_asks_who_is_home(hass, rack):
+async def test_hung_without_a_choice_waits_for_a_person(hass, rack):
+    await _hang(hass)
+    assert hass.states.get(ON_RACK).state == "on"
+    assert hass.states.get(PLACE).state == "Not set", "a recommendation or a timeout never chooses"
+    assert not rack["dehum_on"], "nothing is switched on until someone confirms"
+    assert _titles(rack["alex"]) == ["👕 Laundry hung — where is it drying?"]
+    assert not rack["sam"], "Sam is away"
+    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_INDOORS"})
+    for _ in range(6):
+        await hass.async_block_till_done()
+    assert hass.states.get(PLACE).state == "Indoors"
+    assert len(rack["dehum_on"]) == 1, "confirmed indoors -> dehumidifier on"
+
+
+async def test_answer_outside_after_waiting(hass, rack):
+    await _hang(hass)
+    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_OUTSIDE"})
+    for _ in range(4):
+        await hass.async_block_till_done()
+    assert hass.states.get(PLACE).state == "Outside" and not rack["dehum_on"]
+
+
+@pytest.mark.parametrize("rack_inputs", [{"no_choice": "indoors"}])
+async def test_v19_behaviour_counts_it_as_indoors(hass, rack):
     await _hang(hass)
     assert hass.states.get(PLACE).state == "Indoors"
     assert len(rack["dehum_on"]) == 1
     assert _titles(rack["alex"]) == ["👕 Laundry hung — where is it drying?"]
-    assert not rack["sam"], "Sam is away"
-    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_OUTSIDE"})
+
+
+async def test_not_hung_puts_nothing_on_the_rack(hass, rack):
+    await _hang(hass, "Not hung")
+    assert hass.states.get(ON_RACK).state == "off"
+    assert hass.states.get(PLACE).state == "Not set"
+    assert not rack["dehum_on"] and not rack["alex"]
+
+
+async def test_new_wash_resets_the_place_when_the_rack_is_empty(hass, rack):
+    await _hang(hass, "Outside")
+    assert hass.states.get(ON_RACK).state == "on"
+    await hass.services.async_call("input_boolean", "turn_off", {"entity_id": ON_RACK}, blocking=True)  # put away
     for _ in range(4):
         await hass.async_block_till_done()
-    assert hass.states.get(PLACE).state == "Outside"
+    await hass.services.async_call("input_select", "select_option", {"entity_id": PLACE, "option": "Outside"}, blocking=True)
+    await hass.services.async_call("input_boolean", "turn_on", {"entity_id": WAITING}, blocking=True)
+    for _ in range(4):
+        await hass.async_block_till_done()
+    assert hass.states.get(PLACE).state == "Not set"
 
 
 async def test_outside_rain_soon_warns_once_then_brought_in(hass, rack, later):
