@@ -17,7 +17,16 @@ blueprint:
 
 
     It runs one request at a time and checks the state when it runs, so two
-    taps can't both count.
+    taps can't both count. Give the buttons a `step`, so a late tap can't
+    overwrite an answer that already arrived from a phone:
+
+    - `step: hung` for the "Hung …" buttons: counts only while the laundry is
+      still waiting;
+
+    - `step: move` for the buttons shown while it's on the rack (Indoors /
+      Outside / Change): counts only once it's on the rack.
+
+    Without `step`, it works as before (whichever applies).
   domain: script
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/script/laundry/laundry_hung.yaml
   input:
@@ -52,6 +61,11 @@ fields:
     name: Place
     required: true
     selector: { select: { options: [Indoors, Outside, Not hung, Change] } }
+  step:
+    name: Step (recommended)
+    description: hung = answering where it was hung; move = changing where it's drying. Leave empty for either.
+    required: false
+    selector: { select: { options: [hung, move] } }
 
 variables:
   waiting_entity: !input waiting
@@ -60,6 +74,7 @@ variables:
   indoor: !input indoor_option
   outside: !input outside_option
   not_hung: !input not_hung_option
+  step_now: "{{ step | default('') }}"
   wanted: >-
     {{ {'Indoors': indoor, 'Outside': outside, 'Not hung': not_hung}.get(place, place) }}
 
@@ -68,7 +83,7 @@ sequence:
       - alias: Still waiting in the machine → this is the answer
         conditions:
           - condition: template
-            value_template: "{{ is_state(waiting_entity, 'on') and place in ['Indoors', 'Outside', 'Not hung'] }}"
+            value_template: "{{ step_now in ['', 'hung'] and is_state(waiting_entity, 'on') and place in ['Indoors', 'Outside', 'Not hung'] }}"
         sequence:
           - action: input_select.select_option
             target: { entity_id: "{{ place_entity }}" }
@@ -78,7 +93,7 @@ sequence:
       - alias: Already on the rack → change where it's drying
         conditions:
           - condition: template
-            value_template: "{{ is_state(rack_entity, 'on') and place in ['Indoors', 'Outside', 'Change'] }}"
+            value_template: "{{ step_now in ['', 'move'] and is_state(rack_entity, 'on') and place in ['Indoors', 'Outside', 'Change'] }}"
         sequence:
           - action: input_select.select_option
             target: { entity_id: "{{ place_entity }}" }

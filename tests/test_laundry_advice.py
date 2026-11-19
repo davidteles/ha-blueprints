@@ -178,3 +178,24 @@ async def test_script_change_swaps_on_the_rack(hass, hung_script):
 async def test_script_does_nothing_when_nothing_is_pending(hass, hung_script):
     await _hung(hass, "Outside")
     assert hass.states.get(PLACE).state == "Not set"
+
+
+
+async def test_script_late_hung_tap_cannot_overwrite_an_answer(hass, hung_script):
+    """The phone answered Outside; a dashboard 'Hung indoors' tap lands a moment later."""
+    await hass.services.async_call("input_boolean", "turn_on", {"entity_id": WAITING}, blocking=True)
+    await _hung(hass, "Outside")                     # the first answer (as the phone button would)
+    await hass.services.async_call("input_boolean", "turn_on", {"entity_id": RACK}, blocking=True)  # rack automation
+    await hass.services.async_call("script", "laundry_hung", {"place": "Indoors", "step": "hung"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(PLACE).state == "Outside", "a late 'hung' answer is ignored"
+    await hass.services.async_call("script", "laundry_hung", {"place": "Change", "step": "move"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(PLACE).state == "Indoors", "a deliberate change of location still works"
+
+
+async def test_script_move_does_nothing_while_still_waiting(hass, hung_script):
+    await hass.services.async_call("input_boolean", "turn_on", {"entity_id": WAITING}, blocking=True)
+    await hass.services.async_call("script", "laundry_hung", {"place": "Outside", "step": "move"}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get(PLACE).state == "Not set" and hass.states.get(WAITING).state == "on"
