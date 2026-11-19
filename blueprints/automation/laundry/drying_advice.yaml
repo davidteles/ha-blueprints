@@ -1,0 +1,149 @@
+blueprint:
+  name: Laundry drying advice — indoors or outside?
+  description: >-
+    Advice only: should the laundry go outside or stay in? It never decides
+    where the laundry is. A person still chooses, for example with the
+    "Laundry done" buttons or the dashboard.
+
+
+    It looks at the next few hours of one or more hourly forecasts and an
+    optional rain gauge. The result is saved in a Text helper as
+    `choice|reason|basis|first rain|checked at`:
+
+    - **outdoors** — "No rain forecast in the next 3 h"
+
+    - **indoors** — "Rain likely around 15:00", or "Rain detected nearby now"
+
+    - **unknown** — "No reliable recommendation · forecast unavailable"
+
+
+    **Unknown never counts as dry.** An hour counts only if its forecast gives
+    a rain chance or a rain amount. Without enough covered hours, the advice
+    is *unknown*, not *outdoors*. A rain gauge reading above zero always means
+    indoors. Forecast times are approximate.
+
+
+    It refreshes when the laundry starts waiting, every 30 minutes while it
+    waits, after a restart, and whenever something fires the event
+    `laundry_advice_refresh`.
+
+
+    **Create first:** a Text helper "Laundry drying advice" (max length 255).
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/laundry/drying_advice.yaml
+  input:
+    advice:
+      name: '"Laundry drying advice" text helper'
+      selector: { entity: { domain: input_text } }
+    forecasts:
+      name: Weather forecasts
+      description: One or more weather entities with an hourly forecast (e.g. Met.no for rain amounts plus a local one for rain chance).
+      selector: { entity: { domain: weather, multiple: true } }
+    pending:
+      name: '"Laundry waiting" toggle (optional)'
+      description: Refresh while this is on. Without it, it refreshes every 30 minutes all day.
+      default: []
+      selector: { entity: { domain: input_boolean } }
+    rain_now:
+      name: Rain sensor (optional)
+      description: A rain gauge (rain when above 0) or a binary rain sensor (rain when on).
+      default: []
+      selector: { entity: { domain: [sensor, binary_sensor] } }
+    rain_last_hour:
+      name: Rain in the last hour (optional)
+      description: A sensor with the rain of the last hour (mm). 0.2 mm or more counts as recent rain.
+      default: []
+      selector: { entity: { domain: sensor } }
+    window:
+      name: Look ahead
+      default: 3
+      selector: { number: { min: 1, max: 12, unit_of_measurement: h } }
+    wet_probability:
+      name: Wet if the rain chance is at least
+      default: 40
+      selector: { number: { min: 5, max: 100, step: 5, unit_of_measurement: "%" } }
+    wet_amount:
+      name: Wet if the forecast rain is at least
+      default: 0.2
+      selector: { number: { min: 0.1, max: 5, step: 0.1, unit_of_measurement: mm } }
+    min_hours:
+      name: Hours of forecast needed for "outdoors"
+      default: 3
+      selector: { number: { min: 1, max: 12 } }
+
+mode: restart
+
+variables:
+  advice_entity: !input advice
+  forecast_list: !input forecasts
+  forecasts: "{{ [forecast_list] if forecast_list is string else forecast_list | list }}"
+  pending_entity: !input pending
+  rain_now: !input rain_now
+  rain_last_hour: !input rain_last_hour
+  window: !input window
+  wet_probability: !input wet_probability
+  wet_amount: !input wet_amount
+  min_hours: !input min_hours
+
+triggers:
+  - trigger: state
+    entity_id: !input pending
+    to: "on"
+  - trigger: time_pattern
+    minutes: /30
+  - trigger: homeassistant
+    event: start
+  - trigger: event
+    event_type: laundry_advice_refresh
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.platform == 'event' or pending_entity in ['', none, []] or is_state(pending_entity, 'on') }}
+
+actions:
+  - action: weather.get_forecasts
+    target: { entity_id: "{{ forecasts }}" }
+    data: { type: hourly }
+    response_variable: fc
+    continue_on_error: true
+  - variables:
+      result: >-
+        {%- set end = now() + timedelta(hours=window | int) -%}
+        {%- set rainy = ['rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail', 'snowy'] -%}
+        {%- set ns = namespace(best=0, risk=none) -%}
+        {%- for w in forecasts -%}
+          {%- set cov = namespace(n=0) -%}
+          {%- for f in ((fc[w].forecast if fc is defined and fc and w in fc else []) or []) -%}
+            {%- set t = as_local(as_datetime(f.datetime)) -%}
+            {%- if t < end and t + timedelta(hours=1) > now() -%}
+              {%- set p = f.precipitation_probability | default(none) -%}
+              {%- set mm = f.precipitation | default(none) -%}
+              {%- set p_ok = p is number and p >= 0 -%}
+              {%- set mm_ok = mm is number -%}
+              {%- if p_ok or mm_ok -%}{%- set cov.n = cov.n + 1 -%}{%- endif -%}
+              {%- if ns.risk is none and ((p_ok and p >= wet_probability | float) or (mm_ok and mm >= wet_amount | float) or f.condition in rainy) -%}
+                {%- set ns.risk = t -%}
+              {%- elif ns.risk is not none and t < ns.risk and ((p_ok and p >= wet_probability | float) or (mm_ok and mm >= wet_amount | float) or f.condition in rainy) -%}
+                {%- set ns.risk = t -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- set ns.best = [ns.best, cov.n] | max -%}
+        {%- endfor -%}
+        {%- set gauge = states(rain_now) if rain_now not in ['', none, []] else 'unavailable' -%}
+        {%- set raining = (rain_now.startswith('binary_sensor.') and gauge == 'on') or (gauge | is_number and gauge | float > 0) -%}
+        {%- set recent = rain_last_hour not in ['', none, []] and states(rain_last_hour) | float(0) >= 0.2 -%}
+        {%- if raining or recent -%}
+          {%- set out = ['indoors', 'Rain detected nearby now' if raining else 'It rained nearby in the last hour', 'local_hazard', ''] -%}
+        {%- elif ns.risk is not none -%}
+          {%- set out = ['indoors', 'Rain likely now' if ns.risk <= now() else 'Rain likely around ' ~ ns.risk.strftime('%H:%M'), 'forecast', ns.risk.strftime('%H:%M')] -%}
+        {%- elif ns.best >= min_hours | int -%}
+          {%- set out = ['outdoors', 'No rain forecast in the next ' ~ window | int ~ ' h', 'forecast_and_local' if gauge not in ['unavailable', 'unknown'] else 'forecast_only', ''] -%}
+        {%- else -%}
+          {%- set out = ['unknown', 'No reliable recommendation · forecast unavailable', 'insufficient', ''] -%}
+        {%- endif -%}
+        {{ out + [now().strftime('%H:%M')] }}
+  - action: input_text.set_value
+    target: { entity_id: "{{ advice_entity }}" }
+    data: { value: "{{ result | join('|') }}" }

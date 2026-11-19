@@ -60,8 +60,10 @@ New to these? Start with one of these three. Each one is a single automation, sa
 
 | Blueprint | What it does | Import |
 |---|---|---|
-| **Laundry done — stays "waiting" until it's emptied** | When the cycle ends, a "laundry waiting" toggle turns on and one notification arrives with *Remind me later* / *Done*. It clears when you press Done, start the next cycle, switch the machine on, or turn the toggle off on a dashboard. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Flaundry_done_until_emptied.yaml) |
-| **Drying-rack reminder** | Laundry hung in the morning → reminder that evening; later → the next evening. *Put away* button. Optional **indoors or outside**: indoors switches a dehumidifier on; outside watches the rain gauge and forecast and warns the phones at home before it rains, with an *It's indoors* button. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Fdrying_rack_reminder.yaml) |
+| **Laundry done — stays "waiting" until it's emptied** | When the cycle ends, a "laundry waiting" toggle turns on and one notification arrives with *Remind me later* / *Done*. It clears when you press Done, start the next cycle, switch the machine on, or turn the toggle off on a dashboard. Optional: **Hung indoors / Hung outside / Nothing to hang** buttons with the drying advice in the title, and "the laundry is dry" after a washer-dryer cycle. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Flaundry_done_until_emptied.yaml) |
+| **Drying-rack reminder** | Laundry hung in the morning → reminder that evening; later → the next evening. *Put away* button. Optional **indoors or outside**: indoors switches a dehumidifier on; outside watches the rain gauge and forecast and warns the phones at home before it rains, with an *It's indoors* button. Taken out without a choice → it waits for a person (nothing is switched on); *Not hung* puts nothing on the rack. |
+| **Laundry drying advice** | "Outside recommended · no rain forecast in the next 3 h" or "Indoors · rain likely around 15:00", from one or more hourly forecasts and a rain gauge. Advice only: a person still chooses. Unknown forecast hours never count as dry. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Fdrying_advice.yaml) |
+| **Laundry hung** *(script)* | One script for every laundry button on a dashboard: *Indoors*, *Outside*, *Not hung* or *Change*. One tap at a time, and only while something is pending. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fscript%2Flaundry%2Flaundry_hung.yaml) | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Fdrying_rack_reminder.yaml) |
 | **Appliance ready but not started** | Remote start left on, but nothing started or scheduled → reminder, with an optional *Start now* button. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flaundry%2Fappliance_ready_not_started.yaml) |
 
 ## Car
@@ -182,7 +184,8 @@ Some blueprints need a helper. Create it first under *Settings → Devices & ser
 | Motion light auto-off | A **Timer** (e.g. "Entrance auto-off pause"). Add dashboard buttons that start it for 30 min / 1 h / 2 h. |
 | Pause an appliance | A **Toggle** (input_boolean, e.g. "Dehumidifier paused by window") |
 | Laundry done | A **Toggle** "Laundry waiting" |
-| Drying-rack reminder | A **Toggle** "Laundry on the drying rack" and a **Date and time** helper "Drying-rack reminder at". For indoors/outside: a **Dropdown** "Laundry drying place" (*Not set*, *Indoors*, *Outside*) and a **Toggle** "Laundry rain alert" |
+| Drying-rack reminder | A **Toggle** "Laundry on the drying rack" and a **Date and time** helper "Drying-rack reminder at". For indoors/outside: a **Dropdown** "Laundry drying place" (*Not set*, *Indoors*, *Outside*, *Not hung*) and a **Toggle** "Laundry rain alert" |
+| Laundry drying advice | A **Text** helper "Laundry drying advice" (max length 255) |
 | Appointment reminders | A **Date and time** helper "Car inspection booked" (optional **Toggle** "Car inspection is booked") |
 | Car not plugged in | A **Number** helper "Car plug-in reminder below" (5–100 %, step 5) |
 | Charging session cost | A **Number** helper "Charging session cost" (box mode, step 0.001); optional **Text** helper "Last charging session" |
@@ -232,38 +235,40 @@ Delete the automation made from it (*Settings → Automations & scenes*), then t
 
 The newer blueprints ask for a **notification action** such as `notify.mobile_app_your_phone`. To reach several phones, make a [notify group](https://www.home-assistant.io/integrations/group/#notify-groups) and use `notify.your_group`. Buttons in notifications (*Done*, *Unlock*…) need the Home Assistant Companion app; press and hold the notification to see them.
 
-### Drying-rack buttons for a dashboard
+### Laundry buttons for a dashboard
 
-Two buttons shown while the laundry is waiting: each sets the dropdown, then turns "Laundry waiting" off.
+Create one script from **Laundry hung** (e.g. `script.laundry_hung`), then add buttons that call it. They show while the laundry is waiting:
 
 ```yaml
-type: horizontal-stack
+type: grid
+columns: 3
+square: false
 cards:
   - type: button
     name: Hung indoors
     icon: mdi:home
-    tap_action:
-      action: perform-action
-      perform_action: script.turn_on
-      target: { entity_id: script.laundry_hung_indoors }
+    tap_action: { action: perform-action, perform_action: script.laundry_hung, data: { place: Indoors } }
   - type: button
     name: Hung outside
     icon: mdi:weather-sunny
-    tap_action:
-      action: perform-action
-      perform_action: script.turn_on
-      target: { entity_id: script.laundry_hung_outside }
+    tap_action: { action: perform-action, perform_action: script.laundry_hung, data: { place: Outside } }
+  - type: button
+    name: Nothing to hang
+    icon: mdi:close-circle-outline
+    tap_action: { action: perform-action, perform_action: script.laundry_hung, data: { place: Not hung } }
 visibility:
   - { condition: state, entity: input_boolean.laundry_waiting, state: "on" }
 ```
 
-Each script is two steps: `input_select.select_option` (Indoors / Outside) on the dropdown, then `input_boolean.turn_off` on "Laundry waiting". Show a red card while "Laundry rain alert" is on, with a tap that selects *Indoors*.
+Once it's on the rack, a button with `place: Change` swaps indoors and outside. Show a red card while "Laundry rain alert" is on, with a tap that calls the script with `place: Indoors`.
+
+> **Mushroom template cards:** if you give one an `entity`, also set `icon_tap_action`. Otherwise, tapping the icon toggles that entity instead of running your action.
 
 ## How these are tested
 
 Every blueprint is imported into a real Home Assistant before it lands here, then driven with test helpers and simulated sensors through each path (finished → reminder → button → cleared, and so on), with notifications going to Home Assistant's own notification list.
 
-The three starter picks, the offline alert and the drying-rack indoors/outside rain warning also have **automated scenario tests** (`pytest`, in [tests/](tests/)) that run the real blueprint files on every change: the normal run, a manual override, an unavailable sensor, a repeated event and a short blip that must stay quiet. Run them with Python 3.13: `pip install -r requirements_test.txt && pytest`. What only a phone or a real device can show stays on the manual checks above.
+The three starter picks, the offline alert, the drying-rack indoors/outside rain warning, the drying advice, the wash-done choice buttons and the laundry-hung script also have **automated scenario tests** (`pytest`, in [tests/](tests/)) that run the real blueprint files on every change: the normal run, a manual override, an unavailable sensor, a repeated event and a short blip that must stay quiet. Run them with Python 3.13: `pip install -r requirements_test.txt && pytest`. What only a phone or a real device can show stays on the manual checks above.
 
 In daily use on Home Assistant **2026.11.2**; the automated tests run on 2026.2.
 

@@ -12,6 +12,16 @@ blueprint:
     toggle off from a dashboard — and the phone notification disappears too.
 
 
+    **Optional — where did you hang it?** Pick the "Laundry drying place"
+    dropdown (the one the Drying-rack reminder uses). The notification then
+    asks **Hung indoors / Hung outside / Nothing to hang**, with the drying
+    advice in the title if you also pick the "Laundry drying advice" text.
+    Each wash gets its own button IDs, so a button from an older notification
+    can't change the next load. When the step just before "finished" was a
+    drying step (a washer-dryer), it says the laundry is dry and offers
+    **Taken out** instead.
+
+
     **Create first:** a Toggle helper, e.g. "Laundry waiting". Recommended: a
     Date and time helper, "Washer finished at", so "done since …" stays right
     after a restart (Home Assistant resets a toggle's "last changed" time when
@@ -59,6 +69,38 @@ blueprint:
       name: Title
       default: "🧺 Washing done"
       selector: { text: {} }
+    choice_section:
+      name: Where did you hang it? (optional)
+      icon: mdi:hanger
+      collapsed: true
+      input:
+        place:
+          name: '"Laundry drying place" dropdown'
+          description: Turns the notification buttons into Hung indoors / Hung outside / Nothing to hang. Needs the "Finished at" helper above.
+          default: []
+          selector: { entity: { domain: input_select } }
+        indoor_option:
+          name: Dropdown option meaning indoors
+          default: Indoors
+          selector: { text: {} }
+        outside_option:
+          name: Dropdown option meaning outside
+          default: Outside
+          selector: { text: {} }
+        not_hung_option:
+          name: Dropdown option meaning "nothing hung"
+          default: Not hung
+          selector: { text: {} }
+        advice:
+          name: '"Laundry drying advice" text (optional)'
+          description: From the "Laundry drying advice" blueprint. Its recommendation goes into the title.
+          default: []
+          selector: { entity: { domain: input_text } }
+        drying_states:
+          name: '"Came out dry" states'
+          description: If the machine was in one of these just before finishing (a washer-dryer), the laundry is dry.
+          default: drying, cooling, wrinkle_prevent
+          selector: { text: {} }
 
 mode: parallel
 max: 10
@@ -80,6 +122,15 @@ variables:
       title: Remind me later
     - action: LAUNDRY_DONE
       title: Done
+  place_entity: !input place
+  indoor: !input indoor_option
+  outside: !input outside_option
+  not_hung: !input not_hung_option
+  advice_entity: !input advice
+  has_advice: "{{ advice_entity not in ['', none, []] }}"
+  drying_input: !input drying_states
+  drying_list: "{{ drying_input.split(',') | map('trim') | reject('eq', '') | list }}"
+  choice_mode: "{{ place_entity not in ['', none, []] and has_finished }}"
 
 triggers:
   - trigger: state
@@ -104,6 +155,15 @@ triggers:
     from: "on"
     to: "off"
     id: cleared_elsewhere
+  - trigger: event
+    event_type: mobile_app_notification_action
+    id: choice
+
+conditions:
+  - alias: Of all phone buttons, only this blueprint's choice buttons
+    condition: template
+    value_template: >-
+      {{ trigger.id != 'choice' or (trigger.event.data.action | default('')).startswith(('LAUNDRY_HUNG_', 'LAUNDRY_NONE_')) }}
 
 actions:
   - choose:
@@ -123,11 +183,45 @@ actions:
               - action: input_datetime.set_datetime
                 target: { entity_id: "{{ finished_entity }}" }
                 data: { timestamp: "{{ now().timestamp() }}" }
-          - action: "{{ notify_action }}"
-            data:
-              title: "{{ title }}"
-              message: "Finished at {{ now().strftime('%H:%M') }} — time to empty it.\n👆 Press and hold for: Remind me later · Done"
-              data: { tag: laundry, group: laundry, actions: "{{ buttons }}" }
+          - if:
+              - condition: template
+                value_template: "{{ choice_mode and has_advice }}"
+            then:
+              - alias: Ask for fresh drying advice, wait a moment for it
+                event: laundry_advice_refresh
+              - wait_for_trigger:
+                  - trigger: state
+                    entity_id: !input advice
+                timeout: { seconds: 10 }
+          - variables:
+              load: "{{ state_attr(finished_entity, 'timestamp') | int(0) if has_finished else 0 }}"
+              dried: "{{ trigger.from_state.state in drying_list }}"
+              adv: "{{ ((states(advice_entity) if has_advice else '') ~ '||||').split('|') }}"
+              rec: "{{ adv[0] if adv[0] in ['indoors', 'outdoors'] else '' }}"
+              choice_buttons: >-
+                {% if dried %}{{ [{'action': 'LAUNDRY_NONE_' ~ load, 'title': 'Taken out'}] }}
+                {% else %}{{ [{'action': 'LAUNDRY_HUNG_INDOORS_' ~ load, 'title': 'Hung indoors' ~ (' (recommended)' if rec == 'indoors' else '')},
+                              {'action': 'LAUNDRY_HUNG_OUTSIDE_' ~ load, 'title': 'Hung outside' ~ (' (recommended)' if rec == 'outdoors' else '')},
+                              {'action': 'LAUNDRY_NONE_' ~ load, 'title': 'Nothing to hang'}] }}{% endif %}
+          - if:
+              - condition: template
+                value_template: "{{ choice_mode }}"
+            then:
+              - action: "{{ notify_action }}"
+                data:
+                  title: >-
+                    {% if dried %}✅ Wash and dry done{% else %}{{ title }}{{ {'outdoors': ' · Outside recommended', 'indoors': ' · Indoors recommended'}.get(rec, '') }}{% endif %}
+                  message: >-
+                    {% if dried %}Finished at {{ now().strftime('%H:%M') }} — the laundry is dry, take it out.
+                    👆 Press and hold for: Taken out{% else %}Finished at {{ now().strftime('%H:%M') }}. {{ adv[1] if adv[1] else 'No recommendation' }}. Choose once it's on the rack.
+                    👆 Press and hold for: Hung indoors · Hung outside · Nothing to hang{% endif %}
+                  data: { tag: laundry, group: laundry, actions: "{{ choice_buttons }}" }
+            else:
+              - action: "{{ notify_action }}"
+                data:
+                  title: "{{ title }}"
+                  message: "Finished at {{ now().strftime('%H:%M') }} — time to empty it.\n👆 Press and hold for: Remind me later · Done"
+                  data: { tag: laundry, group: laundry, actions: "{{ buttons }}" }
       - alias: Remind me later
         conditions:
           - condition: trigger
@@ -160,6 +254,24 @@ actions:
           - condition: template
             value_template: "{{ is_state(waiting_entity, 'on') }}"
         sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ waiting_entity }}" }
+      - alias: Hung indoors / outside / nothing → set the dropdown, laundry no longer waiting
+        conditions:
+          - condition: trigger
+            id: choice
+          - condition: template
+            alias: This load (not an older notification), still waiting
+            value_template: >-
+              {{ choice_mode and is_state(waiting_entity, 'on')
+                 and trigger.event.data.action.split('_')[-1] == (state_attr(finished_entity, 'timestamp') | int(0)) | string }}
+        sequence:
+          - variables:
+              a: "{{ trigger.event.data.action }}"
+          - action: input_select.select_option
+            target: { entity_id: "{{ place_entity }}" }
+            data:
+              option: "{{ indoor if a.startswith('LAUNDRY_HUNG_INDOORS_') else outside if a.startswith('LAUNDRY_HUNG_OUTSIDE_') else not_hung }}"
           - action: input_boolean.turn_off
             target: { entity_id: "{{ waiting_entity }}" }
       - alias: Toggle turned off anywhere → remove the phone notification
