@@ -204,6 +204,7 @@ async def test_indoors_never_checks_the_forecast(hass, rack, later):
 async def test_put_away_resets_to_not_set(hass, rack, later):
     await _hang(hass, "Outside")
     await later(hours=30)  # the reminder (with its Put away button) is sent
+    await hass.async_block_till_done()
     hass.bus.async_fire("mobile_app_notification_action", {"action": _btn(rack["rack_notify"], "LAUNDRY_RACK_DONE")})
     for _ in range(4):
         await hass.async_block_till_done()

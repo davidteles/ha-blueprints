@@ -54,6 +54,7 @@ def _dry(rack):
 async def test_b1_old_put_away_does_not_clear_the_next_load(hass, rack, later):
     await _hang(hass, "Outside")                       # load A
     await later(hours=30)                              # A's reminder is sent
+    await _run(hass)
     old_done = _action(rack["rack_notify"], "LAUNDRY_RACK_DONE")
     await _put_away(hass)                              # A put away from the dashboard
     await _new_wash(hass)
@@ -69,6 +70,7 @@ async def test_b1_old_place_answer_does_not_move_the_next_load(hass, rack, later
     await _tap(hass, _action(rack["alex"], "LAUNDRY_INDOORS"))
     await _put_away(hass)
     await later(hours=20)                              # the next load, the next day
+    await _run(hass)
     await _new_wash(hass)
     await _hang(hass, "Indoors")                       # B
     await _tap(hass, old_outside)                      # A's other button, pressed late
@@ -79,6 +81,7 @@ async def test_b1_old_rain_answer_does_not_move_the_next_load(hass, rack, later)
     await _hang(hass, "Outside")                       # A
     _rain_soon(rack)
     await later(minutes=5)
+    await _run(hass)
     old_in = _action(rack["alex"], "LAUNDRY_BROUGHT_IN")
     await _put_away(hass)
     await _new_wash(hass)
@@ -93,9 +96,11 @@ async def test_b1_current_answers_still_work(hass, rack, later):
     await _hang(hass, "Outside")
     _rain_soon(rack)
     await later(minutes=5)
+    await _run(hass)
     await _tap(hass, _action(rack["alex"], "LAUNDRY_BROUGHT_IN"))
     assert hass.states.get(PLACE).state == "Indoors"
     await later(hours=30)
+    await _run(hass)
     await _tap(hass, _action(rack["rack_notify"], "LAUNDRY_RACK_DONE"))
     assert hass.states.get(ON_RACK).state == "off"
 
@@ -113,12 +118,15 @@ async def test_b2_failed_or_empty_forecast_keeps_the_warning(hass, rack, later):
     await _hang(hass, "Outside")
     _rain_soon(rack)
     await later(minutes=5)
+    await _run(hass)
     assert hass.states.get(ALERT).state == "on"
     rack["set_forecast"]([])                           # forecast service returns nothing
     await later(minutes=5)
+    await _run(hass)
     assert hass.states.get(ALERT).state == "on", "no data is not 'dry'"
     _dry(rack)                                         # a real dry forecast
     await later(minutes=5)
+    await _run(hass)
     assert hass.states.get(ALERT).state == "off"
 
 
@@ -126,9 +134,11 @@ async def test_b2_stale_warning_expires(hass, rack, later):
     await _hang(hass, "Outside")
     _rain_soon(rack)
     await later(minutes=5)
+    await _run(hass)
     rack["set_forecast"]([])
     for _ in range(4):
         await later(hours=1, minutes=40)
+        await _run(hass)
     assert hass.states.get(ALERT).state == "off", "a warning with no data for hours expires"
 
 
@@ -145,6 +155,7 @@ async def test_b3_nothing_to_hang_keeps_a_outside_and_watched(hass, rack, later)
     assert hass.states.get(PLACE).state == "Outside", "A is still outside"
     _rain_soon(rack)
     await later(minutes=5)
+    await _run(hass)
     assert hass.states.get(ALERT).state == "on", "A's rain watch still runs"
 
 
@@ -156,6 +167,7 @@ async def test_b4_forecast_amount_alone_counts_as_rain(hass, rack, later):
     rack["set_forecast"]([{"datetime": (dt_util.now() + timedelta(minutes=15)).isoformat(),
                            "condition": "cloudy", "precipitation": 0.6}])
     await later(minutes=5)
+    await _run(hass)
     assert hass.states.get(ALERT).state == "on"
 
 
@@ -164,4 +176,5 @@ async def test_b4_a_trace_amount_is_not_rain(hass, rack, later):
     rack["set_forecast"]([{"datetime": (dt_util.now() + timedelta(minutes=15)).isoformat(),
                            "condition": "cloudy", "precipitation": 0.1, "precipitation_probability": 20}])
     await later(minutes=5)
+    await _run(hass)
     assert hass.states.get(ALERT).state == "off"
