@@ -1,0 +1,140 @@
+blueprint:
+  name: Phone almost flat while away — one quiet heads-up
+  description: >-
+    When a phone that is away from home reports **2 % or less**, send **one**
+    notification, by default to its owner only (e.g. to their watch or another
+    device), so they can charge it or tell someone. No location is ever put in
+    the message.
+
+
+    - Checked whenever the phone reports its battery, and when it leaves home
+      (so a phone that is already low when you go out is caught).
+
+    - Ignored: unknown or unavailable readings, readings older than the
+      "fresh" limit, and a phone that says it is charging.
+
+    - One alert per low-battery episode. It re-arms only after the battery
+      is back at the re-arm level (5 % by default) or the phone is charging.
+
+    - A second recipient is opt-in and off by default.
+
+
+    **Best effort, not a safety alert:** the Home Assistant app reports battery
+    on its own schedule. A phone can skip from 3 % straight to switched-off
+    without ever reporting 2 %.
+
+
+    **Create first:** a **Toggle helper** for this blueprint to remember that it
+    already alerted (e.g. "Alex phone low alerted").
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/presence/phone_battery_critical_away.yaml
+  input:
+    battery:
+      name: Phone battery level
+      description: The Home Assistant app's battery level sensor for this phone.
+      selector: { entity: { domain: sensor, device_class: battery } }
+    battery_state:
+      name: Phone battery state (optional)
+      description: The app's battery state sensor (Charging / Not Charging / Full). Used to skip a phone that is charging.
+      default: []
+      selector: { entity: { domain: sensor } }
+    who:
+      name: Person or tracker
+      description: Away = anything but home.
+      selector: { entity: { domain: [person, device_tracker] } }
+    threshold:
+      name: Alert at or below
+      default: 2
+      selector: { number: { min: 1, max: 20, unit_of_measurement: "%" } }
+    rearm:
+      name: Re-arm at or above
+      default: 5
+      selector: { number: { min: 2, max: 50, unit_of_measurement: "%" } }
+    fresh_minutes:
+      name: Reading must be newer than
+      default: 30
+      selector: { number: { min: 5, max: 240, unit_of_measurement: min } }
+    alerted:
+      name: '"Already alerted" toggle'
+      selector: { entity: { domain: input_boolean } }
+    name:
+      name: Phone name in the message
+      default: Your phone
+      selector: { text: {} }
+    notify_action:
+      name: Notify the owner with
+      description: e.g. notify.mobile_app_alex_watch, or the phone itself.
+      default: notify.notify
+      selector: { text: {} }
+    extra_notify:
+      name: Also notify (opt-in)
+      description: Leave empty unless the owner has agreed. e.g. notify.mobile_app_sam_phone
+      default: ""
+      selector: { text: {} }
+
+mode: queued
+max: 5
+
+variables:
+  battery_entity: !input battery
+  state_entity: !input battery_state
+  who_entity: !input who
+  alerted_entity: !input alerted
+  threshold: !input threshold
+  rearm: !input rearm
+  fresh_minutes: !input fresh_minutes
+  name: !input name
+  notify_action: !input notify_action
+  extra_notify: !input extra_notify
+  raw: "{{ states(battery_entity) }}"
+  level: "{{ raw | float(-1) if raw not in ['unknown', 'unavailable', 'none', ''] else -1 }}"
+  fresh: >-
+    {% set s = states[battery_entity] %}
+    {{ s is not none and (now() - s.last_reported).total_seconds() <= (fresh_minutes | float(30)) * 60 }}
+  charging: >-
+    {{ state_entity not in ['', none, []] and (states(state_entity) | lower) in ['charging', 'full'] }}
+  away: "{{ states(who_entity) not in ['home', 'unknown', 'unavailable'] }}"
+
+triggers:
+  - trigger: state
+    entity_id: !input battery
+    not_to: [unknown, unavailable]
+  - trigger: state
+    entity_id: !input battery_state
+    not_to: [unknown, unavailable]
+  - trigger: state
+    entity_id: !input who
+    from: home
+    not_to: [unknown, unavailable]
+
+actions:
+  - choose:
+      - alias: Charged again or charging → re-arm
+        conditions:
+          - condition: template
+            value_template: "{{ is_state(alerted_entity, 'on') and (charging or level >= rearm | float(5)) }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target: { entity_id: "{{ alerted_entity }}" }
+      - alias: Away, fresh reading at or below the threshold, not charging, not alerted yet → one heads-up
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ away and fresh and not charging and 0 <= level <= threshold | float(2)
+                 and is_state(alerted_entity, 'off') }}
+        sequence:
+          - action: input_boolean.turn_on
+            target: { entity_id: "{{ alerted_entity }}" }
+          - variables:
+              title: "🪫 {{ name }} is at {{ level | int }}%"
+              message: It may switch off soon. Charge it, or let someone know.
+          - action: "{{ notify_action }}"
+            continue_on_error: true
+            data: { title: "{{ title }}", message: "{{ message }}", data: { tag: phone-battery-critical } }
+          - if:
+              - condition: template
+                value_template: "{{ extra_notify | trim != '' }}"
+            then:
+              - action: "{{ extra_notify | trim }}"
+                continue_on_error: true
+                data: { title: "{{ title }}", message: "{{ message }}", data: { tag: phone-battery-critical } }

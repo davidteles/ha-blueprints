@@ -28,6 +28,16 @@ blueprint:
       with an **It's indoors** button. That button switches to indoors.
       If nobody is home, every phone gets it. A "rain alert" toggle stays on
       meanwhile, so a dashboard can show it.
+      A failed or empty forecast is not an all-clear: the warning stays until
+      a real forecast is dry (or 3 hours pass with no forecast at all).
+
+
+    **One rack, one load at a time:** every button carries the load it was sent
+    for, so an old notification (yesterday's *Put away*, an earlier *Outside*)
+    can't act on the laundry drying now. Add the "Hung at" helper for this to be
+    exact; without it, two loads hung on the same day share their buttons. If a
+    second load finishes while the first is still drying and you pick *Not
+    hung*, the first load keeps its place and its rain watch.
 
 
     **Create first:** a Toggle "Laundry on the drying rack" and a Date and time
@@ -115,7 +125,10 @@ blueprint:
           selector: { entity: { domain: input_boolean } }
         rain_sensor:
           name: Rain sensor (optional)
-          description: A rain gauge (raining when above 0) or a binary rain sensor (raining when on).
+          description: >-
+            A rain gauge's current rate (raining when above 0) or a binary rain sensor
+            (raining when on). Not a daily or hourly total: a total stays above 0 long
+            after the rain stops.
           default: []
           selector: { entity: { domain: [sensor, binary_sensor] } }
         weather:
@@ -175,16 +188,31 @@ variables:
     {% endfor %}
     {{ ns.l or all_targets }}
   place_now: "{{ states(place_entity) if has_place else '' }}"
-  # Phone buttons answered with the same action ids whichever phone pressed them.
-  place_buttons:
-    - { action: LAUNDRY_INDOORS, title: Indoors }
-    - { action: LAUNDRY_OUTSIDE, title: Outside }
+  # Every button carries the load it belongs to (the "hung at" time, or the reminder
+  # time without that helper), so an old notification can't act on the next load.
+  episode: >-
+    {% set ts = state_attr(hung_entity, 'timestamp') if has_hung else state_attr(reminder_entity, 'timestamp') %}
+    {{ ts | int(0) }}
+  btn: "{{ ('_' ~ episode) if episode | int(0) > 0 else '' }}"
+  tid: >-
+    {%- if trigger.id != 'phone' -%}{{ trigger.id }}
+    {%- else -%}
+      {%- set a = trigger.event.data.action | default('') -%}
+      {%- set ns = namespace(t='ignore') -%}
+      {%- for k, v in [('LAUNDRY_RACK_DONE', 'put_away'), ('LAUNDRY_INDOORS', 'say_indoors'),
+                       ('LAUNDRY_BROUGHT_IN', 'say_indoors'), ('LAUNDRY_OUTSIDE', 'say_outside')] -%}
+        {%- if a == k ~ btn -%}{%- set ns.t = v -%}{%- endif -%}
+      {%- endfor -%}{{ ns.t }}
+    {%- endif -%}
 
 conditions:
+  - alias: Phone buttons from another notification, or from an earlier load, are ignored
+    condition: template
+    value_template: "{{ tid != 'ignore' }}"
   - alias: The 5-minute rain check only runs while laundry is outside
     condition: template
     value_template: >-
-      {{ trigger.id != 'rain_check' or (has_place and has_alert and is_state(place_entity, outside)
+      {{ tid != 'rain_check' or (has_place and has_alert and is_state(place_entity, outside)
          and is_state(on_rack_entity, 'on')) }}
 
 triggers:
@@ -201,27 +229,15 @@ triggers:
   - trigger: time
     at: !input reminder_at
     id: due
-  - trigger: event
+  - alias: A phone button (checked below against the load on the rack now)
+    trigger: event
     event_type: mobile_app_notification_action
-    event_data: { action: LAUNDRY_RACK_DONE }
-    id: put_away
+    id: phone
   - trigger: state
     entity_id: !input on_rack
     from: "on"
     to: "off"
     id: put_away
-  - trigger: event
-    event_type: mobile_app_notification_action
-    event_data: { action: LAUNDRY_INDOORS }
-    id: say_indoors
-  - trigger: event
-    event_type: mobile_app_notification_action
-    event_data: { action: LAUNDRY_BROUGHT_IN }
-    id: say_indoors
-  - trigger: event
-    event_type: mobile_app_notification_action
-    event_data: { action: LAUNDRY_OUTSIDE }
-    id: say_outside
   - trigger: state
     entity_id: !input place
     not_from: [unavailable, unknown]
@@ -237,11 +253,14 @@ actions:
   - choose:
       - alias: Taken out but not hung (machine care, or it came out dry) → nothing on the rack
         conditions:
-          - condition: trigger
-            id: hung
           - condition: template
-            value_template: "{{ has_place and is_state(place_entity, not_hung) }}"
+            value_template: "{{ tid == 'hung' and has_place and is_state(place_entity, not_hung) }}"
         sequence:
+          - if:
+              - condition: template
+                value_template: "{{ is_state(on_rack_entity, 'on') }}"
+            then:
+              - stop: An earlier load is still on the rack; its place is put back separately
           - variables:
               first: "{{ (state_attr(place_entity, 'options') or [''])[0] }}"
           - if:
@@ -253,8 +272,8 @@ actions:
                 data: { option: "{{ first }}" }
       - alias: New wash done, rack empty → the next place isn't chosen yet
         conditions:
-          - condition: trigger
-            id: new_load
+          - condition: template
+            value_template: "{{ tid == 'new_load' }}"
           - condition: template
             value_template: "{{ has_place and is_state(on_rack_entity, 'off') }}"
         sequence:
@@ -267,8 +286,33 @@ actions:
               - action: input_select.select_option
                 target: { entity_id: "{{ place_entity }}" }
                 data: { option: "{{ first }}" }
+      - alias: >-
+          "Not hung" for a new load while an earlier one is on the rack: its place was
+          put back after "waiting" turned off, so nothing new was hung
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ tid == 'hung' and has_place and is_state(on_rack_entity, 'on')
+                 and states[place_entity].last_changed > trigger.to_state.last_changed }}
+        sequence:
+          - stop: Nothing new on the rack
+      - alias: >-
+          "Not hung" picked while an earlier load is on the rack → keep that load's place
+          (one rack: the place belongs to the laundry already drying)
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ tid == 'place_changed' and has_place and trigger.to_state.state == not_hung
+                 and is_state(on_rack_entity, 'on') and trigger.from_state.state in [indoor, outside] }}
+        sequence:
+          - wait_template: "{{ is_state(waiting_entity, 'off') }}"
+            timeout: { seconds: 30 }
+          - action: input_select.select_option
+            target: { entity_id: "{{ place_entity }}" }
+            data: { option: "{{ trigger.from_state.state }}" }
+          - stop: Earlier load's place kept
       - alias: Laundry hung → schedule the reminder
-        conditions: [{ condition: trigger, id: hung }]
+        conditions: [{ condition: template, value_template: "{{ tid == 'hung' }}" }]
         sequence:
           - action: input_boolean.turn_on
             target: { entity_id: "{{ on_rack_entity }}" }
@@ -285,6 +329,13 @@ actions:
               datetime: >-
                 {% set at = today_at(reminder_time) %}
                 {{ (at if now().hour < cutoff | int else at + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S') }}
+          - variables:
+              episode_now: >-
+                {% set ts = state_attr(hung_entity, 'timestamp') if has_hung else state_attr(reminder_entity, 'timestamp') %}
+                {{ ts | int(0) }}
+              place_buttons:
+                - { action: "LAUNDRY_INDOORS{{ ('_' ~ episode_now) if episode_now | int(0) > 0 else '' }}", title: Indoors }
+                - { action: "LAUNDRY_OUTSIDE{{ ('_' ~ episode_now) if episode_now | int(0) > 0 else '' }}", title: Outside }
           - if:
               - condition: template
                 value_template: "{{ has_place and place_now not in [indoor, outside] }}"
@@ -313,8 +364,8 @@ actions:
                         data: { tag: laundry-place, group: laundry, actions: "{{ place_buttons }}" }
       - alias: Reminder time
         conditions:
-          - condition: trigger
-            id: due
+          - condition: template
+            value_template: "{{ tid == 'due' }}"
           - condition: template
             value_template: "{{ is_state(on_rack_entity, 'on') }}"
         sequence:
@@ -331,9 +382,9 @@ actions:
               data:
                 tag: laundry-rack
                 group: laundry
-                actions: [{ action: LAUNDRY_RACK_DONE, title: Put away }]
+                actions: [{ action: "LAUNDRY_RACK_DONE{{ btn }}", title: Put away }]
       - alias: Put away (phone button, or the toggle turned off)
-        conditions: [{ condition: trigger, id: put_away }]
+        conditions: [{ condition: template, value_template: "{{ tid == 'put_away' }}" }]
         sequence:
           - action: input_boolean.turn_off
             target: { entity_id: "{{ on_rack_entity }}" }
@@ -370,14 +421,14 @@ actions:
                   data: { message: clear_notification, data: { tag: laundry-rain } }
       - alias: Phone answer → set the dropdown
         conditions:
-          - condition: trigger
-            id: [say_indoors, say_outside]
+          - condition: template
+            value_template: "{{ tid in ['say_indoors', 'say_outside'] }}"
           - condition: template
             value_template: "{{ has_place }}"
         sequence:
           - action: input_select.select_option
             target: { entity_id: "{{ place_entity }}" }
-            data: { option: "{{ indoor if trigger.id == 'say_indoors' else outside }}" }
+            data: { option: "{{ indoor if tid == 'say_indoors' else outside }}" }
           - repeat:
               for_each: "{{ all_targets }}"
               sequence:
@@ -390,8 +441,8 @@ actions:
       - condition: template
         value_template: >-
           {{ has_place and is_state(on_rack_entity, 'on') and is_state(place_entity, indoor)
-             and ((trigger.id == 'hung' and place_now == indoor)
-                  or (trigger.id == 'place_changed' and trigger.from_state.state != indoor)) }}
+             and ((tid == 'hung' and place_now == indoor)
+                  or (tid == 'place_changed' and trigger.from_state.state != indoor)) }}
     then:
       - if:
           - condition: template
@@ -417,7 +468,7 @@ actions:
       - condition: template
         value_template: >-
           {{ has_place and has_alert and is_state(place_entity, outside) and is_state(on_rack_entity, 'on')
-             and trigger.id in ['hung', 'rain_check', 'place_changed']
+             and tid in ['hung', 'rain_check', 'place_changed']
              and (rain_sensor not in ['', none, []] or weather_entity not in ['', none, []]) }}
     then:
       - variables:
@@ -442,11 +493,18 @@ actions:
               {%- set dt = as_local(as_datetime(f.datetime)) -%}
               {%- if dt <= now() + timedelta(minutes=warn_minutes | int) and dt + timedelta(hours=1) > now()
                     and (f.condition in ['rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail']
-                         or (f.precipitation_probability | default(0) | float(0)) >= 60) -%}
+                         or (f.precipitation_probability | default(0) | float(0)) >= 60
+                         or (f.precipitation | default(0) | float(0)) >= 0.2) -%}
                 {%- set ns.t = 'now' if dt <= now() else dt.strftime('%H:%M') -%}
               {%- endif -%}
             {%- endfor -%}{{ ns.t }}
           when: "{{ 'now' if raining or rain_at == 'now' else 'around ' ~ rain_at }}"
+          have_forecast: >-
+            {{ weather_entity in ['', none, []]
+               or (fc and weather_entity in fc and (fc[weather_entity].forecast | default([]) | count) > 0) }}
+          warning_expired: >-
+            {{ has_alert and is_state(alert_entity, 'on')
+               and (now() - states[alert_entity].last_changed).total_seconds() > 3 * 3600 }}
       - choose:
           - alias: Rain now or soon → warn the phones at home, once
             conditions:
@@ -469,11 +527,15 @@ actions:
                           tag: laundry-rain
                           group: laundry
                           push: { interruption-level: time-sensitive }
-                          actions: [{ action: LAUNDRY_BROUGHT_IN, title: "It's indoors" }]
-          - alias: Dry again and nothing in the forecast → stand down
+                          actions: [{ action: "LAUNDRY_BROUGHT_IN{{ btn }}", title: "It's indoors" }]
+          - alias: >-
+              Dry again and a real forecast with no rain → stand down. A failed or empty
+              forecast is not an all-clear; such a warning expires after 3 hours.
             conditions:
               - condition: template
-                value_template: "{{ not raining and rain_at == '' and is_state(alert_entity, 'on') }}"
+                value_template: >-
+                  {{ not raining and rain_at == '' and is_state(alert_entity, 'on')
+                     and (have_forecast or warning_expired) }}
             sequence:
               - action: input_boolean.turn_off
                 target: { entity_id: "{{ alert_entity }}" }
