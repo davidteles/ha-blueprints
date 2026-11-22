@@ -146,3 +146,22 @@ async def test_b3_nothing_to_hang_keeps_a_outside_and_watched(hass, rack, later)
     _rain_soon(rack)
     await later(minutes=5)
     assert hass.states.get(ALERT).state == "on", "A's rain watch still runs"
+
+
+# ---------------------------------------------------------------- B4: forecast amount without a rainy condition
+
+async def test_b4_forecast_amount_alone_counts_as_rain(hass, rack, later):
+    """Same rule as the drying advice: 0.2 mm or more is wet, whatever the condition says."""
+    await _hang(hass, "Outside")
+    rack["set_forecast"]([{"datetime": (dt_util.now() + timedelta(minutes=15)).isoformat(),
+                           "condition": "cloudy", "precipitation": 0.6}])
+    await later(minutes=5)
+    assert hass.states.get(ALERT).state == "on"
+
+
+async def test_b4_a_trace_amount_is_not_rain(hass, rack, later):
+    await _hang(hass, "Outside")
+    rack["set_forecast"]([{"datetime": (dt_util.now() + timedelta(minutes=15)).isoformat(),
+                           "condition": "cloudy", "precipitation": 0.1, "precipitation_probability": 20}])
+    await later(minutes=5)
+    assert hass.states.get(ALERT).state == "off"

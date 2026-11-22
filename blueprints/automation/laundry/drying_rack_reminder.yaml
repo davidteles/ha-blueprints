@@ -125,7 +125,10 @@ blueprint:
           selector: { entity: { domain: input_boolean } }
         rain_sensor:
           name: Rain sensor (optional)
-          description: A rain gauge (raining when above 0) or a binary rain sensor (raining when on).
+          description: >-
+            A rain gauge's current rate (raining when above 0) or a binary rain sensor
+            (raining when on). Not a daily or hourly total: a total stays above 0 long
+            after the rain stops.
           default: []
           selector: { entity: { domain: [sensor, binary_sensor] } }
         weather:
@@ -490,7 +493,8 @@ actions:
               {%- set dt = as_local(as_datetime(f.datetime)) -%}
               {%- if dt <= now() + timedelta(minutes=warn_minutes | int) and dt + timedelta(hours=1) > now()
                     and (f.condition in ['rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail']
-                         or (f.precipitation_probability | default(0) | float(0)) >= 60) -%}
+                         or (f.precipitation_probability | default(0) | float(0)) >= 60
+                         or (f.precipitation | default(0) | float(0)) >= 0.2) -%}
                 {%- set ns.t = 'now' if dt <= now() else dt.strftime('%H:%M') -%}
               {%- endif -%}
             {%- endfor -%}{{ ns.t }}
