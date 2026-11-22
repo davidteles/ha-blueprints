@@ -12,12 +12,17 @@ blueprint:
 
 
     **🔌 Plugged in** — "Waiting to charge · 63% → 80%" →
-    **⚡ Charging** — "63% → 80% · 7.4 kW · 300 km", with the battery as a
-    progress bar towards the charge limit → **✅ Charged** (alerts once,
-    silently at night). Everything closes by itself when the cable is unplugged
+    **⚡ Charging** — "1 h 20 min left · 80% at 23:40 · 7 kW · 300 km" (the
+    car's own remaining-time estimate, counted down between car updates;
+    "Charging to 80%" when the car gives none), with the battery as a progress
+    bar towards the charge limit → **✅ Charged** (alerts once, silently at
+    night). Everything closes by itself when the cable is unplugged
     — straight away if your wall charger reports it (car sensors can lag for
     hours after unplugging).
     If charging stops before the limit, it goes back to "plugged in".
+    With a wall charger status, charging at home starts the card as soon as the
+    charger starts (car data can arrive minutes later), and unplugging never
+    flashes a short "plugged in" card while the car's sensors catch up.
 
 
     Each phase is its own Live Activity, so a long wait for cheap hours can't hit
@@ -44,6 +49,22 @@ blueprint:
       description: Used when you have no plug sensor below. Separated by commas.
       default: ready_for_charging, conserving, charging_interrupted, connected, plugged_in, paused, complete
       selector: { text: {} }
+    not_plugged_values:
+      name: '"Cable not connected" values'
+      description: >-
+        Values of the charging state that mean no cable, separated by commas.
+        Many cars report this a few seconds before their "cable connected"
+        sensor turns off; without it a short "plugged in" card appeared right
+        after unplugging.
+      default: connect_cable, disconnected, unplugged, not_connected, no_cable
+      selector: { text: {} }
+    remaining_time:
+      name: Remaining charging time (optional, recommended)
+      description: >-
+        The car's "time to full / remaining charging time" sensor (minutes or
+        hours). Shown on the charging card instead of repeating the percentage.
+      default: []
+      selector: { entity: { domain: sensor } }
     plug:
       name: Cable connected sensor (optional, recommended)
       default: []
@@ -59,6 +80,22 @@ blueprint:
       name: '"No car connected" charger values'
       description: Separated by commas. Upper/lower case doesn't matter.
       default: Ready, Locked, available, disconnected, not_connected
+      selector: { text: {} }
+    charger_car_values:
+      name: '"Car connected" charger values'
+      description: >-
+        Charger states that mean a car is connected (so the card starts at once,
+        before the car reports). Separated by commas.
+      default: Charging, Paused, Scheduled, Waiting for car demand, Waiting, Locked, car connected, connected, charging, suspended_ev, suspended_evse
+      selector: { text: {} }
+    charger_charging_values:
+      name: '"Charging" charger values'
+      default: Charging, charging
+      selector: { text: {} }
+    charger_done_values:
+      name: '"Car is full" charger values'
+      description: After charging, these mean the car stopped asking for power (shown as charged).
+      default: Waiting for car demand, suspended_ev, finished, complete
       selector: { text: {} }
     car_location:
       name: Car location (optional)
@@ -135,6 +172,31 @@ variables: &live_vars
   charger_empty: >-
     {{ charger_entity not in ['', none, []] and states(charger_entity) | lower in empty_list
        and (location_entity in ['', none, []] or is_state(location_entity, 'home')) }}
+  car_input: !input charger_car_values
+  car_list: "{{ car_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  chg_input: !input charger_charging_values
+  chg_list: "{{ chg_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  done_input: !input charger_done_values
+  done_list: "{{ done_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  charger_here: >-
+    {{ charger_entity not in ['', none, []]
+       and (location_entity in ['', none, []] or not is_state(location_entity, 'not_home')) }}
+  charger_state: "{{ states(charger_entity) | lower if charger_entity not in ['', none, []] else '' }}"
+  charger_car: "{{ charger_here and charger_state in car_list }}"
+  charger_charging: "{{ charger_car and charger_state in chg_list }}"
+  charger_done: "{{ charger_car and charger_state in done_list }}"
+  not_plugged_input: !input not_plugged_values
+  not_plugged_list: "{{ not_plugged_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
+  remaining_entity: !input remaining_time
+  left: >-
+    {%- set m = 0 -%}
+    {%- if remaining_entity not in ['', none, []] -%}
+    {%- set v = states(remaining_entity) | float(0) -%}
+    {%- set u = (state_attr(remaining_entity, 'unit_of_measurement') or 'min') | lower -%}
+    {%- set m = v * 60 if u in ['h', 'hr', 'hours'] else (v / 60 if u in ['s', 'sec'] else v) -%}
+    {%- endif -%}
+    {%- set st = states[remaining_entity] if remaining_entity not in ['', none, []] else none -%}
+    {%- if m > 0 and st is not none -%}{{ [((st.last_reported + timedelta(minutes=m) - now()).total_seconds() / 60) | round(0) | int, 1] | max }}{%- else -%}0{%- endif -%}
   battery_entity: !input battery
   limit_entity: !input limit
   power_entity: !input power
@@ -152,20 +214,23 @@ variables: &live_vars
   charging_list: "{{ charging_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
   plugged_list: "{{ plugged_input.split(',') | map('trim') | map('lower') | reject('eq', '') | list }}"
   cs: "{{ states(state_entity) | lower }}"
-  charging: "{{ cs in charging_list }}"
+  charging: "{{ cs in charging_list or charger_charging }}"
   plugged: >-
     {% set b = states(plug_entity) if plug_entity not in ['', none, []] else 'none' %}
-    {{ not charger_empty and (charging or (b == 'on' if b in ['on', 'off'] else cs in plugged_list)) }}
+    {% if charger_car %}{{ true }}
+    {% elif charger_empty or cs in not_plugged_list %}{{ false }}
+    {% else %}{{ charging or (b == 'on' if b in ['on', 'off'] else cs in plugged_list) }}{% endif %}
   soc: "{{ states(battery_entity) | float(0) | round(0) | int }}"
   target: "{{ (states(limit_entity) | float(100) | round(0) | int) if limit_entity not in ['', none, []] else 100 }}"
-  kw: "{{ (states(power_entity) | float(0) | round(1)) if power_entity not in ['', none, []] else 0 }}"
+  kw_raw: "{{ (states(power_entity) | float(0) | round(1)) if power_entity not in ['', none, []] else 0 }}"
+  kw: "{{ (kw_raw | round(0) | int) if kw_raw >= 20 else kw_raw }}"
   km: "{{ (states(range_entity) | float(0) | round(0) | int) if range_entity not in ['', none, []] else 0 }}"
   km_unit: "{{ (state_attr(range_entity, 'unit_of_measurement') or 'km') if range_entity not in ['', none, []] else '' }}"
   prev: "{{ states(phase_entity) }}"
   phase: >-
     {% if not plugged %}none
     {% elif charging %}charging
-    {% elif prev in ['charging', 'charged'] and (soc >= target - 1 or cs == 'conserving') %}charged
+    {% elif prev in ['charging', 'charged'] and (soc >= target - 1 or cs == 'conserving' or charger_done) %}charged
     {% else %}waiting{% endif %}
   tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
   tags:
@@ -204,6 +269,13 @@ triggers:
     entity_id: !input power
     not_to: [unknown, unavailable]
     not_from: [unknown, unavailable]
+  - trigger: state
+    entity_id: !input remaining_time
+    not_to: [unknown, unavailable]
+    not_from: [unknown, unavailable]
+  - alias: Refresh the countdown every 10 min
+    trigger: time_pattern
+    minutes: /10
   - alias: '"Hide until done" switched on'
     trigger: state
     entity_id: !input hide_switch
@@ -258,7 +330,7 @@ actions:
                 {{ {'waiting': '🔌 ' ~ name ~ ' plugged in', 'charging': '⚡ ' ~ name ~ ' charging', 'charged': '✅ ' ~ name ~ ' charged'}[phase] }}
               message: >-
                 {% if phase == 'waiting' %}{{ ('Already at ' ~ soc ~ '%') if soc >= target - 1 else ('Waiting to charge · ' ~ soc ~ '% → ' ~ target ~ '%') }}{{ (' · ' ~ range_text) if range_text else '' }}
-                {%- elif phase == 'charging' %}{{ soc }}% → {{ target }}%{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ (' · ' ~ range_text) if range_text else '' }}
+                {%- elif phase == 'charging' %}{% if left > 0 %}{{ (left ~ ' min') if left < 60 else ((left // 60) ~ ' h ' ~ '%02d' % (left % 60) ~ ' min') }} left · {{ target }}% at {{ (now() + timedelta(minutes=left)).strftime('%H:%M') }}{% else %}Charging to {{ target }}%{% endif %}{{ (' · ' ~ kw ~ ' kW') if kw > 0 else '' }}{{ (' · ' ~ range_text) if range_text else '' }}
                 {%- else %}{{ soc }}%{{ (' · ' ~ range_text) if range_text else '' }} · unplug when you go{% endif %}
               data:
                 tag: "{{ tags[phase] }}"
