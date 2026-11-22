@@ -74,6 +74,13 @@ async def _hang(hass, place=None):
         await hass.async_block_till_done()
 
 
+def _btn(calls, prefix):
+    """The id of the last button starting with prefix that was really sent (ids carry the load)."""
+    ids = [a["action"] for c in calls for a in (c.data.get("data") or {}).get("actions", []) if a["action"].startswith(prefix)]
+    assert ids, f"no {prefix} button was sent"
+    return ids[-1]
+
+
 def _titles(calls):
     return [c.data.get("title", c.data.get("message")) for c in calls]
 
@@ -98,7 +105,7 @@ async def test_hung_without_a_choice_waits_for_a_person(hass, rack):
     assert not rack["dehum_on"], "nothing is switched on until someone confirms"
     assert _titles(rack["alex"]) == ["👕 Laundry hung — where is it drying?"]
     assert not rack["sam"], "Sam is away"
-    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_INDOORS"})
+    hass.bus.async_fire("mobile_app_notification_action", {"action": _btn(rack["alex"], "LAUNDRY_INDOORS")})
     for _ in range(6):
         await hass.async_block_till_done()
     assert hass.states.get(PLACE).state == "Indoors"
@@ -107,7 +114,7 @@ async def test_hung_without_a_choice_waits_for_a_person(hass, rack):
 
 async def test_answer_outside_after_waiting(hass, rack):
     await _hang(hass)
-    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_OUTSIDE"})
+    hass.bus.async_fire("mobile_app_notification_action", {"action": _btn(rack["alex"], "LAUNDRY_OUTSIDE")})
     for _ in range(4):
         await hass.async_block_till_done()
     assert hass.states.get(PLACE).state == "Outside" and not rack["dehum_on"]
@@ -155,7 +162,7 @@ async def test_outside_rain_soon_warns_once_then_brought_in(hass, rack, later):
     await later(minutes=5)
     await hass.async_block_till_done()
     assert len(rack["alex"]) == 1, "warned once, not every 5 minutes"
-    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_BROUGHT_IN"})
+    hass.bus.async_fire("mobile_app_notification_action", {"action": _btn(rack["alex"], "LAUNDRY_BROUGHT_IN")})
     for _ in range(6):
         await hass.async_block_till_done()
     assert hass.states.get(PLACE).state == "Indoors"
@@ -181,7 +188,8 @@ async def test_forecast_clears_stands_down(hass, rack, later):
     hass.states.async_set(RAIN, "0.4")
     for _ in range(4):
         await hass.async_block_till_done()
-    hass.states.async_set(RAIN, "0")
+    rack["set_forecast"]([{"datetime": (dt_util.now() + timedelta(hours=1)).isoformat(), "condition": "sunny"}])
+    hass.states.async_set(RAIN, "0")  # dry gauge AND a real dry forecast (an empty one is not an all-clear)
     for _ in range(4):
         await hass.async_block_till_done()
     assert hass.states.get(ALERT).state == "off"
@@ -193,9 +201,10 @@ async def test_indoors_never_checks_the_forecast(hass, rack, later):
     assert not rack["forecast"]
 
 
-async def test_put_away_resets_to_not_set(hass, rack):
+async def test_put_away_resets_to_not_set(hass, rack, later):
     await _hang(hass, "Outside")
-    hass.bus.async_fire("mobile_app_notification_action", {"action": "LAUNDRY_RACK_DONE"})
+    await later(hours=30)  # the reminder (with its Put away button) is sent
+    hass.bus.async_fire("mobile_app_notification_action", {"action": _btn(rack["rack_notify"], "LAUNDRY_RACK_DONE")})
     for _ in range(4):
         await hass.async_block_till_done()
     assert hass.states.get(ON_RACK).state == "off"
