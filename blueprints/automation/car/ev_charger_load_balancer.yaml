@@ -21,9 +21,22 @@ blueprint:
     - **Pauses** below the minimum current; **resumes** only after the minimum
       pause, when the room stayed at the resume level or more for ~5 minutes.
 
+    - **Raises and resumes need evidence for the whole window:** a fresh pair of
+      readings in every 30-second slot. A gap, or the same old reading seen again
+      on the minute timer, never counts as room. With gaps it only holds, lowers
+      or pauses.
+
+    - **Resumes only after the charger confirms the current:** it sets the
+      resume current first and resumes once the charger shows it. If the charger
+      never confirms, or stays paused after a resume, it retries at most 3 times,
+      then stays paused and says so in the logbook (resume it yourself).
+
     - **Safety nets:** if the charger still shows a different current 2 minutes
       after the last command (a lost cloud command), it sends it again; if a meter
-      goes silent for 2 minutes while charging, it drops to the minimum current.
+      goes silent, or the two meters stop reporting together (no pair within the
+      pairing time), for 2 minutes while charging, it drops to the minimum
+      current. While the charger's status is unknown or unavailable it sends
+      nothing.
 
     - It only forgets its own pause when the car is unplugged or someone resumed
       the charger themselves.
@@ -34,11 +47,20 @@ blueprint:
     survives restarts. Don't edit it by hand.
 
 
-    **Your meters must report at least every 2 minutes.** The house meter must
-    measure the whole house *including* the charger; the charger meter only the
-    charger. This is a comfort tool, not a safety device: keep the right breaker
-    and an installer-set limit on the charger itself. Only one controller may
-    set the charger: turn off any other load balancer.
+    **Meters:** the house meter must measure the whole house *including* the
+    charger; the charger meter only the charger. Both must report together (a
+    two-channel meter such as a Shelly EM, or meters that report every second)
+    and at least every 30 seconds to raise or resume; slower meters only ever
+    hold, lower or pause. Power in W, kW or MW; any other unit counts as no
+    reading. Power factor in % (e.g. -86) or as a fraction (0.86); the sign is
+    ignored. A house meter that goes negative when you export (solar) is
+    counted as import, so export never adds room. Single-phase only.
+
+
+    **This is a comfort tool, not a protection device.** Cloud commands can be
+    late or lost. Keep the right breaker and an installer-set limit on the
+    charger itself. Only one controller may set the charger: turn off any other
+    load balancer.
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_charger_load_balancer.yaml
   input:
@@ -132,6 +154,11 @@ blueprint:
           name: Shortest pause
           default: 300
           selector: { number: { min: 60, max: 1800, unit_of_measurement: s } }
+        pair_seconds:
+          name: Readings count as taken together within
+          description: The house and charger readings must be this close in time to be used together.
+          default: 2
+          selector: { number: { min: 1, max: 10, unit_of_measurement: s } }
 
 mode: single
 max_exceeded: silent
@@ -154,6 +181,7 @@ variables:
   resume_a: !input resume_current
   settle_s: !input settle_seconds
   pause_min_s: !input min_pause_seconds
+  pair_s: !input pair_seconds
   d: >-
     {%- set t = now().timestamp() | int -%}
     {%- set raw = states(memory) -%}
@@ -161,86 +189,143 @@ variables:
     {%- set m = m if m is mapping else {} -%}
     {%- set hs = states[house_power] -%}
     {%- set cs = states[charger_power] -%}
+    {%- set k = {'W': 1, 'kW': 1000, 'MW': 1000000} -%}
+    {%- set uh = state_attr(house_power, 'unit_of_measurement') -%}
+    {%- set uc = state_attr(charger_power, 'unit_of_measurement') -%}
     {%- set hp = states(house_power) | float(none) -%}
     {%- set cp = states(charger_power) | float(none) -%}
+    {%- set hp = hp * k[uh] if hp is not none and uh in k else none -%}
+    {%- set cp = cp * k[uc] if cp is not none and uc in k else none -%}
     {%- set v = states(voltage_entity) | float(0) if voltage_entity not in ['', none, []] else 0 -%}
     {%- set v = v if v > 50 else nominal_voltage | float(230) -%}
-    {%- set hpf = (states(house_pf_entity) | float(100)) if house_pf_entity not in ['', none, []] else 100 -%}
-    {%- set cpf = (states(charger_pf_entity) | float(100)) if charger_pf_entity not in ['', none, []] else 100 -%}
-    {%- set hpf = hpf if hpf > 1 else 100 -%}
-    {%- set cpf = cpf if cpf > 1 else 100 -%}
+    {#- power factor: % or fraction, sign ignored; nonsense (or none) = 100 % -#}
+    {%- set hpf = (states(house_pf_entity) | float(100)) | abs if house_pf_entity not in ['', none, []] else 100 -%}
+    {%- set cpf = (states(charger_pf_entity) | float(100)) | abs if charger_pf_entity not in ['', none, []] else 100 -%}
+    {%- set hpf = hpf * 100 if 0 < hpf <= 1 else hpf -%}
+    {%- set cpf = cpf * 100 if 0 < cpf <= 1 else cpf -%}
+    {%- set hpf = hpf if 20 <= hpf <= 100 else 100 -%}
+    {%- set cpf = cpf if 20 <= cpf <= 100 else 100 -%}
     {%- set cap = state_attr(charger_current, 'max') | int(32) -%}
     {%- set wb = states(charger_current) | int(none) -%}
     {%- set status = states(status_entity) -%}
+    {%- set known = status not in ['unknown', 'unavailable', 'none', ''] -%}
     {%- set charging = status == charging_value -%}
     {%- set unplugged = status in (unplugged_values.split(',') | map('trim') | list) -%}
-    {%- set paused_status = (paused_value | lower) in (status | lower) -%}
-    {%- set stale = hs is none or cs is none or hp is none or cp is none
-         or (now() - hs.last_reported).total_seconds() > 120 or (now() - cs.last_reported).total_seconds() > 120 -%}
-    {%- set paired = not stale and ((hs.last_reported - cs.last_reported).total_seconds() | abs) < 2 -%}
+    {%- set paused_status = known and (paused_value | lower) in (status | lower) -%}
+    {%- set fresh = hs is not none and cs is not none and hp is not none and cp is not none
+         and (now() - hs.last_reported).total_seconds() <= 120 and (now() - cs.last_reported).total_seconds() <= 120 -%}
+    {%- set paired = fresh and ((hs.last_reported - cs.last_reported).total_seconds() | abs) <= pair_s | float(2) -%}
+    {%- set rt = ([hs.last_reported, cs.last_reported] | max).timestamp() | int if paired else 0 -%}
     {%- set ns = namespace(p=m.get('p', 0) == 1, pt=m.get('pt', 0) | int(0), c=m.get('c', 0) | int(0),
          sp=m.get('sp', 0) == 1, s=m.get('s'), l=m.get('l', []), b=m.get('b', 0) | int(0),
-         send=none, pause=false, resume=false, text='', want=none, low3=none, low5=none) -%}
+         lr=m.get('lr', t) | int(t), r=m.get('r'), rs=m.get('rs', 0) | int(0), f=m.get('f', 0) | int(0),
+         send=none, pause=false, resume=false, ev=false, text='', want=none, low3=none, low5=none) -%}
     {%- set ns.s = ns.s | int if ns.s is number else none -%}
+    {%- set ns.r = ns.r | int if ns.r is number else none -%}
+    {%- set newpair = paired and rt > ns.lr -%}
+    {%- set stale = not fresh or (not paired and t - ns.lr > 120) -%}
+    {#- the window: 10 slots of 30 s ending now; -999 = no fresh pair in that slot -#}
+    {%- set B = (t // 30) | int -%}
+    {%- set shift = B - ns.b -%}
+    {%- set old = ns.l if ns.l is sequence and ns.l is not string else [] -%}
+    {%- set lst = namespace(v=[]) -%}
+    {%- for i in range(10) -%}
+      {%- set j = i + shift -%}
+      {%- set lst.v = lst.v + [(old[j] | int(-999)) if (0 <= shift and j < (old | count)) else -999] -%}
+    {%- endfor -%}
+    {%- set ns.l = lst.v -%}
+    {%- set ns.b = B -%}
     {%- if paired -%}
       {%- set hc = (hp / v / (hpf / 100)) | abs -%}
       {%- set cc = (cp / v / (cpf / 100)) | abs -%}
-      {%- set want = (((limit | float - hc) | round(0, 'floor')) + cc) | round(0, 'floor') | int -%}
-      {%- set ns.want = want -%}
-      {#- lowest room per 30 s bucket for the last 10 buckets (~5 min); -999 = no reading -#}
-      {%- set B = (t // 30) | int -%}
-      {%- set shift = B - ns.b -%}
-      {%- set old = ns.l if ns.l is sequence and ns.l is not string else [] -%}
-      {%- set lst = namespace(v=[]) -%}
-      {%- for i in range(10) -%}
-        {%- set j = i + shift -%}
-        {%- set lst.v = lst.v + [(old[j] | int(-999)) if (0 <= shift and j < (old | count)) else -999] -%}
-      {%- endfor -%}
-      {%- set last = lst.v[9] -%}
-      {%- set ns.l = lst.v[:9] + [want if last == -999 or want < last else last] -%}
-      {%- set ns.b = B -%}
-      {%- set ns.low5 = ns.l | select('gt', -999) | min -%}
-      {%- set ns.low3 = ns.l[4:] | select('gt', -999) | min -%}
+      {%- set ns.want = (((limit | float - hc) | round(0, 'floor')) + cc) | round(0, 'floor') | int -%}
+      {%- if newpair -%}
+        {%- set ns.lr = rt -%}
+        {%- set i = 9 - (B - (rt // 30) | int) -%}
+        {%- if 0 <= i <= 9 -%}
+          {%- set cur = ns.l[i] -%}
+          {%- set ns.l = ns.l[:i] + [ns.want if cur == -999 or ns.want < cur else cur] + ns.l[i + 1:] -%}
+        {%- endif -%}
+      {%- endif -%}
     {%- endif -%}
-    {%- if ns.p and unplugged -%}{%- set ns.p = false -%}{%- endif -%}
+    {#- a low only counts when every finished slot of its window has a reading (the current slot may still be empty) -#}
+    {%- set ns.low5 = (ns.l | select('gt', -999) | min) if -999 not in ns.l[:9] else none -%}
+    {%- set ns.low3 = (ns.l[4:] | select('gt', -999) | min) if -999 not in ns.l[4:9] else none -%}
+    {%- if unplugged -%}{%- set ns.p = false -%}{%- set ns.r = none -%}{%- set ns.rs = 0 -%}{%- set ns.f = 0 -%}{%- endif -%}
     {%- if ns.p and paused_status -%}{%- set ns.sp = true -%}{%- endif -%}
-    {%- if ns.p and charging and (ns.sp or t - ns.pt > 300) -%}{%- set ns.p = false -%}{%- set ns.c = t -%}{%- endif -%}
-    {%- if stale and charging and not ns.p -%}
+    {%- if ns.p and charging and (ns.sp or t - ns.pt > 300) -%}
+      {%- set ns.p = false -%}{%- set ns.c = t -%}{%- set ns.r = none -%}{%- set ns.f = 0 -%}
+    {%- endif -%}
+    {#- did our last resume take? -#}
+    {%- if ns.rs and charging -%}{%- set ns.rs = 0 -%}{%- set ns.f = 0 -%}
+    {%- elif ns.rs and paused_status and t - ns.rs > 180 and not ns.p -%}
+      {%- set ns.rs = 0 -%}{%- set ns.f = ns.f + 1 -%}{%- set ns.p = true -%}{%- set ns.sp = true -%}
+      {%- set ns.pt = t - pause_min_s | int -%}
+      {%- set ns.ev = true -%}
+      {%- set ns.text = ("resume didn't take (the charger still says paused), attempt " ~ ns.f ~ ' of 3') if ns.f < 3
+           else "resume didn't take 3 times: staying paused, resume the charger yourself" -%}
+    {%- endif -%}
+    {%- if not known -%}
+      {%- set ns.text = ns.text or 'charger status unknown: waiting' -%}
+    {%- elif stale and charging and not ns.p -%}
       {%- if ns.s is none or ns.s > min_a | int -%}{%- set ns.send = min_a | int -%}{%- set ns.s = min_a | int -%}{%- set ns.c = t -%}{%- endif -%}
-      {%- set ns.text = 'a meter is silent: minimum current until it reports again' -%}
+      {%- set ns.text = 'no fresh pair of readings: minimum current until they report together again' -%}
     {%- elif paired -%}
       {%- if not charging and not ns.p -%}
-        {%- set ns.text = 'idle' -%}
+        {%- set ns.text = ns.text or 'idle' -%}
       {%- elif ns.p -%}
-        {%- if t - ns.pt >= pause_min_s | int and ns.low5 >= resume_a | int -%}
+        {%- if ns.f >= 3 -%}
+          {#- gave up (logged once when it happened); memory f = 3 shows it -#}
+        {%- elif ns.r is not none -%}
+          {%- if ns.low5 is not none and ns.low5 < resume_a | int -%}
+            {%- set ns.r = none -%}{%- set ns.ev = true -%}{%- set ns.text = 'resume cancelled: not enough room any more' -%}
+          {%- elif wb == ns.r and ns.low5 is not none -%}
+            {%- set ns.resume = true -%}{%- set ns.s = ns.r -%}{%- set ns.p = false -%}{%- set ns.c = t -%}{%- set ns.rs = t -%}
+            {%- set ns.text = 'resume at ' ~ ns.r ~ ' A (the charger confirmed it)' -%}{%- set ns.r = none -%}
+          {%- elif wb != ns.r and t - ns.c >= 120 -%}
+            {%- set ns.f = ns.f + 1 -%}{%- set ns.c = t -%}{%- set ns.ev = true -%}
+            {%- if ns.f < 3 -%}
+              {%- set ns.send = ns.r -%}
+              {%- set ns.text = 'the charger shows ' ~ (wb if wb is not none else 'nothing') ~ ', not ' ~ ns.r ~ ' A: sent it again before resuming (attempt ' ~ (ns.f + 1) ~ ')' -%}
+            {%- else -%}
+              {%- set ns.text = 'the charger never confirmed ' ~ ns.r ~ ' A: staying paused, resume it yourself' -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- elif t - ns.pt >= pause_min_s | int and ns.low5 is not none and ns.low5 >= resume_a | int -%}
           {%- set x = [cap, ns.low5] | min -%}
-          {%- set ns.send = x -%}{%- set ns.resume = true -%}{%- set ns.s = x -%}{%- set ns.p = false -%}{%- set ns.c = t -%}
-          {%- set ns.text = 'resume at ' ~ x ~ ' A' -%}
+          {%- if wb == x -%}
+            {%- set ns.resume = true -%}{%- set ns.s = x -%}{%- set ns.p = false -%}{%- set ns.c = t -%}{%- set ns.rs = t -%}
+            {%- set ns.text = 'resume at ' ~ x ~ ' A' -%}
+          {%- else -%}
+            {%- set ns.send = x -%}{%- set ns.r = x -%}{%- set ns.c = t -%}
+            {%- set ns.text = 'about to resume: setting ' ~ x ~ ' A first' -%}
+          {%- endif -%}
         {%- endif -%}
       {%- elif ns.want < min_a | int -%}
         {%- if ns.s != min_a | int -%}{%- set ns.send = min_a | int -%}{%- endif -%}
         {%- set ns.pause = true -%}{%- set ns.s = min_a | int -%}{%- set ns.p = true -%}{%- set ns.sp = false -%}{%- set ns.pt = t -%}{%- set ns.c = t -%}
+        {%- set ns.r = none -%}{%- set ns.f = 0 -%}
         {%- set ns.text = 'pause: room ' ~ ns.want ~ ' A' -%}
       {%- else -%}
         {%- set target = [cap, ns.want] | min -%}
-        {%- set up = [cap, ns.low3] | min -%}
         {%- if ns.s is none or target < ns.s -%}
           {%- set ns.send = target -%}{%- set ns.s = target -%}{%- set ns.c = t -%}
           {%- set ns.text = 'lower to ' ~ target ~ ' A' -%}
-        {%- elif up >= ns.s + 2 and t - ns.c >= settle_s | int -%}
+        {%- elif ns.low3 is not none and [cap, ns.low3] | min >= ns.s + 2 and t - ns.c >= settle_s | int -%}
+          {%- set up = [cap, ns.low3] | min -%}
           {%- set ns.send = up -%}{%- set ns.s = up -%}{%- set ns.c = t -%}
           {%- set ns.text = 'raise to ' ~ up ~ ' A' -%}
         {%- endif -%}
       {%- endif -%}
     {%- endif -%}
-    {%- if ns.send is none and not ns.pause and not ns.resume and charging and not ns.p
+    {%- if known and ns.send is none and not ns.pause and not ns.resume and charging and not ns.p
           and wb is not none and ns.s is not none and wb != ns.s and t - ns.c >= 120 -%}
       {%- set ns.text = 'sent ' ~ ns.s ~ ' A again (the charger showed ' ~ wb ~ ' A)' -%}
       {%- set ns.send = ns.s -%}{%- set ns.c = t -%}
     {%- endif -%}
     {%- set mem = {'p': 1 if ns.p else 0, 'pt': ns.pt, 'c': ns.c, 'sp': 1 if ns.sp else 0, 's': ns.s,
-                   'b': ns.b, 'l': ns.l} | to_json -%}
-    {{ {'mem': mem, 'send': ns.send, 'pause': ns.pause, 'resume': ns.resume, 'text': ns.text,
+                   'b': ns.b, 'l': ns.l, 'lr': ns.lr, 'r': ns.r, 'rs': ns.rs, 'f': ns.f} | to_json -%}
+    {{ {'mem': mem, 'send': ns.send, 'pause': ns.pause, 'resume': ns.resume, 'event': ns.ev, 'text': ns.text,
         'changed': mem != raw} }}
 
 triggers:
@@ -248,8 +333,9 @@ triggers:
     entity_id: !input house_power
   - trigger: state
     entity_id: !input charger_power
-  - trigger: time_pattern
-    minutes: "/1"
+  - alias: Every 15 s, so each 30-second slot gets the meters' latest report even when the values don't change
+    trigger: time_pattern
+    seconds: "/15"
 
 actions:
   - alias: Remember first, so the next reading sees this decision
@@ -278,7 +364,7 @@ actions:
     then: !input resume_actions
   - if:
       - condition: template
-        value_template: "{{ d.send is not none or d.pause or d.resume }}"
+        value_template: "{{ d.send is not none or d.pause or d.resume or d.event }}"
     then:
       - action: logbook.log
         data:
