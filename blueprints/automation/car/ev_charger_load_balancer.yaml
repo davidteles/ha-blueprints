@@ -1,0 +1,287 @@
+blueprint:
+  name: EV charger load balancer — stay under your main breaker
+  description: >-
+    Keeps the house + car charger under your supply limit by setting the
+    charger's current, pausing it when there isn't room for the minimum, and
+    resuming it when there is again. Built for loads that switch on and off
+    every few seconds (induction hobs, ovens, heaters), so the charger doesn't
+    start and stop all evening.
+
+
+    **How it decides**
+
+    - *Room* = your limit − (house current − charger current), from two power
+      meters read at the same moment.
+
+    - **Lowers at once** when the room drops below what the charger is set to.
+
+    - **Raises** only after the settle time since the last change, and only to
+      the *lowest* room of the last ~3 minutes, in steps of 2 A or more.
+
+    - **Pauses** below the minimum current; **resumes** only after the minimum
+      pause, when the room stayed at the resume level or more for ~5 minutes.
+
+    - **Safety nets:** if the charger still shows a different current 2 minutes
+      after the last command (a lost cloud command), it sends it again; if a meter
+      goes silent for 2 minutes while charging, it drops to the minimum current.
+
+    - It only forgets its own pause when the car is unplugged or someone resumed
+      the charger themselves.
+
+
+    **Create first:** a **Text** helper with *maximum length 255* (e.g.
+    "Charger balancer memory"). The balancer keeps its memory there, so it
+    survives restarts. Don't edit it by hand.
+
+
+    **Your meters must report at least every 2 minutes.** The house meter must
+    measure the whole house *including* the charger; the charger meter only the
+    charger. This is a comfort tool, not a safety device: keep the right breaker
+    and an installer-set limit on the charger itself. Only one controller may
+    set the charger: turn off any other load balancer.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/car/ev_charger_load_balancer.yaml
+  input:
+    meters:
+      name: Meters
+      icon: mdi:meter-electric
+      input:
+        house_power:
+          name: Whole-house power (W)
+          description: Includes the charger.
+          selector: { entity: { domain: sensor, device_class: power } }
+        charger_power:
+          name: Charger power (W)
+          selector: { entity: { domain: sensor, device_class: power } }
+        voltage:
+          name: Voltage sensor (optional)
+          default: []
+          selector: { entity: { domain: sensor, device_class: voltage } }
+        nominal_voltage:
+          name: Voltage if there is no sensor
+          default: 230
+          selector: { number: { min: 100, max: 400, unit_of_measurement: V } }
+        house_power_factor:
+          name: House power factor (optional, %)
+          description: Gives the real current drawn when the meter reports it (e.g. Shelly EM). Leave empty for 100 %.
+          default: []
+          selector: { entity: { domain: sensor, device_class: power_factor } }
+        charger_power_factor:
+          name: Charger power factor (optional, %)
+          default: []
+          selector: { entity: { domain: sensor, device_class: power_factor } }
+    charger:
+      name: Charger
+      icon: mdi:ev-station
+      input:
+        limit:
+          name: Supply limit
+          description: The most the whole house may draw. Leave a margin below the breaker (e.g. 28.5 A on a 30 A supply).
+          default: 25
+          selector: { number: { min: 6, max: 100, step: 0.5, unit_of_measurement: A } }
+        charger_current:
+          name: Charger current setting
+          description: The number entity that sets the charger's maximum current. Its own maximum is never exceeded.
+          selector: { entity: { domain: number } }
+        status:
+          name: Charger status
+          selector: { entity: {} }
+        charging_value:
+          name: Status while charging
+          default: Charging
+          selector: { text: {} }
+        paused_value:
+          name: Status while paused (contains)
+          default: paus
+          selector: { text: {} }
+        unplugged_values:
+          name: Status values that mean no car (comma-separated)
+          default: Ready, Disconnected, Locked
+          selector: { text: {} }
+        pause_actions:
+          name: Pause the charger
+          description: e.g. turn a pause/resume switch off.
+          selector: { action: {} }
+        resume_actions:
+          name: Resume the charger
+          description: >-
+            e.g. turn the pause/resume switch on. For a Wallbox, press its "Resume
+            schedule" button instead, so it stays on its charging schedule.
+          selector: { action: {} }
+        memory:
+          name: Memory (Text helper, max 255)
+          selector: { entity: { domain: input_text } }
+    tuning:
+      name: Tuning
+      icon: mdi:tune
+      collapsed: true
+      input:
+        min_current:
+          name: Minimum charging current
+          default: 6
+          selector: { number: { min: 6, max: 16, unit_of_measurement: A } }
+        resume_current:
+          name: Resume when there is at least
+          default: 8
+          selector: { number: { min: 6, max: 32, unit_of_measurement: A } }
+        settle_seconds:
+          name: Wait after a change before raising
+          default: 180
+          selector: { number: { min: 30, max: 900, unit_of_measurement: s } }
+        min_pause_seconds:
+          name: Shortest pause
+          default: 300
+          selector: { number: { min: 60, max: 1800, unit_of_measurement: s } }
+
+mode: single
+max_exceeded: silent
+
+variables:
+  house_power: !input house_power
+  charger_power: !input charger_power
+  voltage_entity: !input voltage
+  nominal_voltage: !input nominal_voltage
+  house_pf_entity: !input house_power_factor
+  charger_pf_entity: !input charger_power_factor
+  limit: !input limit
+  charger_current: !input charger_current
+  status_entity: !input status
+  charging_value: !input charging_value
+  paused_value: !input paused_value
+  unplugged_values: !input unplugged_values
+  memory: !input memory
+  min_a: !input min_current
+  resume_a: !input resume_current
+  settle_s: !input settle_seconds
+  pause_min_s: !input min_pause_seconds
+  d: >-
+    {%- set t = now().timestamp() | int -%}
+    {%- set raw = states(memory) -%}
+    {%- set m = (raw | from_json(default={})) if raw[:1] == '{' else {} -%}
+    {%- set m = m if m is mapping else {} -%}
+    {%- set hs = states[house_power] -%}
+    {%- set cs = states[charger_power] -%}
+    {%- set hp = states(house_power) | float(none) -%}
+    {%- set cp = states(charger_power) | float(none) -%}
+    {%- set v = states(voltage_entity) | float(0) if voltage_entity not in ['', none, []] else 0 -%}
+    {%- set v = v if v > 50 else nominal_voltage | float(230) -%}
+    {%- set hpf = (states(house_pf_entity) | float(100)) if house_pf_entity not in ['', none, []] else 100 -%}
+    {%- set cpf = (states(charger_pf_entity) | float(100)) if charger_pf_entity not in ['', none, []] else 100 -%}
+    {%- set hpf = hpf if hpf > 1 else 100 -%}
+    {%- set cpf = cpf if cpf > 1 else 100 -%}
+    {%- set cap = state_attr(charger_current, 'max') | int(32) -%}
+    {%- set wb = states(charger_current) | int(none) -%}
+    {%- set status = states(status_entity) -%}
+    {%- set charging = status == charging_value -%}
+    {%- set unplugged = status in (unplugged_values.split(',') | map('trim') | list) -%}
+    {%- set paused_status = (paused_value | lower) in (status | lower) -%}
+    {%- set stale = hs is none or cs is none or hp is none or cp is none
+         or (now() - hs.last_reported).total_seconds() > 120 or (now() - cs.last_reported).total_seconds() > 120 -%}
+    {%- set paired = not stale and ((hs.last_reported - cs.last_reported).total_seconds() | abs) < 2 -%}
+    {%- set ns = namespace(p=m.get('p', 0) == 1, pt=m.get('pt', 0) | int(0), c=m.get('c', 0) | int(0),
+         sp=m.get('sp', 0) == 1, s=m.get('s'), l=m.get('l', []), b=m.get('b', 0) | int(0),
+         send=none, pause=false, resume=false, text='', want=none, low3=none, low5=none) -%}
+    {%- set ns.s = ns.s | int if ns.s is number else none -%}
+    {%- if paired -%}
+      {%- set hc = (hp / v / (hpf / 100)) | abs -%}
+      {%- set cc = (cp / v / (cpf / 100)) | abs -%}
+      {%- set want = (((limit | float - hc) | round(0, 'floor')) + cc) | round(0, 'floor') | int -%}
+      {%- set ns.want = want -%}
+      {#- lowest room per 30 s bucket for the last 10 buckets (~5 min); -999 = no reading -#}
+      {%- set B = (t // 30) | int -%}
+      {%- set shift = B - ns.b -%}
+      {%- set old = ns.l if ns.l is sequence and ns.l is not string else [] -%}
+      {%- set lst = namespace(v=[]) -%}
+      {%- for i in range(10) -%}
+        {%- set j = i + shift -%}
+        {%- set lst.v = lst.v + [(old[j] | int(-999)) if (0 <= shift and j < (old | count)) else -999] -%}
+      {%- endfor -%}
+      {%- set last = lst.v[9] -%}
+      {%- set ns.l = lst.v[:9] + [want if last == -999 or want < last else last] -%}
+      {%- set ns.b = B -%}
+      {%- set ns.low5 = ns.l | select('gt', -999) | min -%}
+      {%- set ns.low3 = ns.l[4:] | select('gt', -999) | min -%}
+    {%- endif -%}
+    {%- if ns.p and unplugged -%}{%- set ns.p = false -%}{%- endif -%}
+    {%- if ns.p and paused_status -%}{%- set ns.sp = true -%}{%- endif -%}
+    {%- if ns.p and charging and (ns.sp or t - ns.pt > 300) -%}{%- set ns.p = false -%}{%- set ns.c = t -%}{%- endif -%}
+    {%- if stale and charging and not ns.p -%}
+      {%- if ns.s is none or ns.s > min_a | int -%}{%- set ns.send = min_a | int -%}{%- set ns.s = min_a | int -%}{%- set ns.c = t -%}{%- endif -%}
+      {%- set ns.text = 'a meter is silent: minimum current until it reports again' -%}
+    {%- elif paired -%}
+      {%- if not charging and not ns.p -%}
+        {%- set ns.text = 'idle' -%}
+      {%- elif ns.p -%}
+        {%- if t - ns.pt >= pause_min_s | int and ns.low5 >= resume_a | int -%}
+          {%- set x = [cap, ns.low5] | min -%}
+          {%- set ns.send = x -%}{%- set ns.resume = true -%}{%- set ns.s = x -%}{%- set ns.p = false -%}{%- set ns.c = t -%}
+          {%- set ns.text = 'resume at ' ~ x ~ ' A' -%}
+        {%- endif -%}
+      {%- elif ns.want < min_a | int -%}
+        {%- if ns.s != min_a | int -%}{%- set ns.send = min_a | int -%}{%- endif -%}
+        {%- set ns.pause = true -%}{%- set ns.s = min_a | int -%}{%- set ns.p = true -%}{%- set ns.sp = false -%}{%- set ns.pt = t -%}{%- set ns.c = t -%}
+        {%- set ns.text = 'pause: room ' ~ ns.want ~ ' A' -%}
+      {%- else -%}
+        {%- set target = [cap, ns.want] | min -%}
+        {%- set up = [cap, ns.low3] | min -%}
+        {%- if ns.s is none or target < ns.s -%}
+          {%- set ns.send = target -%}{%- set ns.s = target -%}{%- set ns.c = t -%}
+          {%- set ns.text = 'lower to ' ~ target ~ ' A' -%}
+        {%- elif up >= ns.s + 2 and t - ns.c >= settle_s | int -%}
+          {%- set ns.send = up -%}{%- set ns.s = up -%}{%- set ns.c = t -%}
+          {%- set ns.text = 'raise to ' ~ up ~ ' A' -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if ns.send is none and not ns.pause and not ns.resume and charging and not ns.p
+          and wb is not none and ns.s is not none and wb != ns.s and t - ns.c >= 120 -%}
+      {%- set ns.text = 'sent ' ~ ns.s ~ ' A again (the charger showed ' ~ wb ~ ' A)' -%}
+      {%- set ns.send = ns.s -%}{%- set ns.c = t -%}
+    {%- endif -%}
+    {%- set mem = {'p': 1 if ns.p else 0, 'pt': ns.pt, 'c': ns.c, 'sp': 1 if ns.sp else 0, 's': ns.s,
+                   'b': ns.b, 'l': ns.l} | to_json -%}
+    {{ {'mem': mem, 'send': ns.send, 'pause': ns.pause, 'resume': ns.resume, 'text': ns.text,
+        'changed': mem != raw} }}
+
+triggers:
+  - trigger: state
+    entity_id: !input house_power
+  - trigger: state
+    entity_id: !input charger_power
+  - trigger: time_pattern
+    minutes: "/1"
+
+actions:
+  - alias: Remember first, so the next reading sees this decision
+    if:
+      - condition: template
+        value_template: "{{ d.changed }}"
+    then:
+      - action: input_text.set_value
+        target: { entity_id: !input memory }
+        data: { value: "{{ d.mem }}" }
+  - if:
+      - condition: template
+        value_template: "{{ d.send is not none }}"
+    then:
+      - action: number.set_value
+        target: { entity_id: !input charger_current }
+        data: { value: "{{ d.send }}" }
+        continue_on_error: true
+  - if:
+      - condition: template
+        value_template: "{{ d.pause }}"
+    then: !input pause_actions
+  - if:
+      - condition: template
+        value_template: "{{ d.resume }}"
+    then: !input resume_actions
+  - if:
+      - condition: template
+        value_template: "{{ d.send is not none or d.pause or d.resume }}"
+    then:
+      - action: logbook.log
+        data:
+          name: Charger balancer
+          message: "{{ d.text }}"
+          entity_id: !input charger_current
