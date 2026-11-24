@@ -1,0 +1,83 @@
+blueprint:
+  name: Team Tracker match memory
+  description: >-
+    Remembers what a Team Tracker sensor does not keep: when the last match ended,
+    and who scored the last goal and when. A dashboard or screensaver can then show
+    the match until an hour after the final whistle, and a "GOAL" line for a few
+    minutes after each goal, and both survive a Home Assistant restart (last_changed
+    does not). The final whistle is the change from IN to POST. A goal is a score that
+    goes up while the match stays IN, so a restart or the next match never counts;
+    a score that goes down (goal taken back) clears the goal.
+    Template helpers that use these are in docs/team-tracker.md.
+  domain: automation
+  source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/sports/team_tracker_match_memory.yaml
+  input:
+    team:
+      name: Team Tracker sensor
+      description: The sensor of your team (state PRE / IN / POST / NOT_FOUND).
+      selector: { entity: { domain: sensor, integration: teamtracker } }
+    ended_at:
+      name: Match ended at
+      description: A Date and time helper. Set at the final whistle.
+      selector: { entity: { domain: input_datetime } }
+    goal_by:
+      name: Last goal by (optional)
+      description: A Text helper. Set to the name of the team that scored; emptied when a goal is taken back.
+      default: ""
+      selector: { entity: { domain: input_text } }
+    goal_at:
+      name: Last goal at (optional)
+      description: A Date and time helper. Set when a goal goes in. Needed with "Last goal by".
+      default: ""
+      selector: { entity: { domain: input_datetime } }
+mode: queued
+max: 10
+triggers:
+  - trigger: state
+    entity_id: !input team
+    from: "IN"
+    to: "POST"
+    id: final_whistle
+  - trigger: state
+    entity_id: !input team
+    attribute: team_score
+    id: team
+  - trigger: state
+    entity_id: !input team
+    attribute: opponent_score
+    id: opponent
+variables:
+  goal_by: !input goal_by
+  goal_at: !input goal_at
+actions:
+  - choose:
+      - conditions: [{ condition: trigger, id: final_whistle }]
+        sequence:
+          - action: input_datetime.set_datetime
+            target: { entity_id: !input ended_at }
+            data: { timestamp: "{{ now().timestamp() }}" }
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ goal_by != '' and goal_at != ''
+                 and trigger.from_state is not none
+                 and trigger.from_state.state == 'IN' and trigger.to_state.state == 'IN' }}
+        sequence:
+          - variables:
+              old: "{{ trigger.from_state.attributes.get(trigger.id ~ '_score') | int(-1) }}"
+              new: "{{ trigger.to_state.attributes.get(trigger.id ~ '_score') | int(-1) }}"
+              scorer: "{{ trigger.to_state.attributes.get(trigger.id ~ '_name') or trigger.id }}"
+          - choose:
+              - conditions: [{ condition: template, value_template: "{{ old >= 0 and new > old }}" }]
+                sequence:
+                  - action: input_text.set_value
+                    target: { entity_id: "{{ goal_by }}" }
+                    data: { value: "{{ scorer }}" }
+                  - action: input_datetime.set_datetime
+                    target: { entity_id: "{{ goal_at }}" }
+                    data: { timestamp: "{{ now().timestamp() }}" }
+              - conditions: [{ condition: template, value_template: "{{ new >= 0 and new < old }}" }]
+                sequence:
+                  - action: input_text.set_value
+                    target: { entity_id: "{{ goal_by }}" }
+                    data: { value: "" }
