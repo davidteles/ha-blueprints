@@ -154,6 +154,12 @@ tap_action:
 | **Always-on power (night standby)** | Each morning stores the house's lowest night-time draw — what never switches off. Leaves out minutes when the car was charging. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fenergy%2Fnight_standby_baseline.yaml) |
 | **Monthly home energy summary** | On the 1st: last month's electricity and gas, cost and change vs the month before, from long-term statistics. Short push, full report in notifications. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fenergy%2Fmonthly_energy_summary.yaml) |
 
+## Sports
+
+| Blueprint | What it does | Import |
+|---|---|---|
+| **Team Tracker match memory** | Saves when your team's last match ended and who scored the last goal (and when), from a [Team Tracker](https://github.com/vasqued2/ha-teamtracker) sensor. Restarts and the next match never count as a goal; a goal taken back clears it. Template helpers for "show the match from 30 min before until 1 h after" and "GOAL for 5 minutes" are in [docs/team-tracker.md](docs/team-tracker.md). | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsports%2Fteam_tracker_match_memory.yaml) |
+
 ## Lights and buttons
 
 | Blueprint | What it does | Import |
