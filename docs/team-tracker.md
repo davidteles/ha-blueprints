@@ -7,6 +7,32 @@ dashboard or screensaver needs. Keep each rule in one helper and point every car
 Create them under Settings → Devices & services → Helpers → Create helper → Template → Binary sensor,
 and replace `sensor.my_team` and the helper names with yours.
 
+## One sensor per competition (not only "all")
+
+Team Tracker's **"all"** league reads the team's fixture list, not the live scoreboards: it never
+reports `IN` or a score, and at kick-off it jumps to the next fixture. Make one Team Tracker sensor per
+competition (sport *soccer*, custom league path such as `por.1`, `uefa.champions`,
+`por.taca.portugal`) and give the blueprint all of them; keep "all" only as a fallback for
+competitions ESPN has no feed for. Then one template sensor picks which one to show (the live match,
+else one finished in the last 4 hours, else the nearest kick-off):
+
+```jinja
+{%- set ids = ['sensor.my_team_league', 'sensor.my_team_champions', 'sensor.my_team_cup', 'sensor.my_team_all'] -%}
+{%- set ns = namespace(live=none, post=none, post_k=none, pre=none, pre_k=none) -%}
+{%- for e in ids -%}
+{%- set s = states(e) -%}{%- set k = state_attr(e, 'date') | as_datetime(none) -%}
+{%- if s == 'IN' and ns.live is none -%}{%- set ns.live = e -%}
+{%- elif s == 'POST' and k is not none and now() < k + timedelta(hours=4) and (ns.post_k is none or k > ns.post_k) -%}{%- set ns.post = e -%}{%- set ns.post_k = k -%}
+{%- elif s == 'PRE' and k is not none and (ns.pre_k is none or k < ns.pre_k) -%}{%- set ns.pre = e -%}{%- set ns.pre_k = k -%}
+{%- endif -%}
+{%- endfor -%}
+{{ ns.live or ns.post or ns.pre or ids | last }}
+```
+
+In the two helpers below, replace `sensor.my_team` with `states('sensor.my_team_match_source')`
+read into a variable (`{% set src = states('sensor.my_team_match_source') %}`, then `states(src)`,
+`state_attr(src, 'date')`, `is_state(src, 'IN')`).
+
 ## Match window
 
 On from 30 minutes before kick-off, during the match (half time included) and for one hour after the

@@ -8,14 +8,18 @@ blueprint:
     does not). The final whistle is the change from IN to POST. A goal is a score that
     goes up while the match stays IN, so a restart or the next match never counts;
     a score that goes down (goal taken back) clears the goal.
-    Template helpers that use these are in docs/team-tracker.md.
+    Pick one Team Tracker sensor per competition (not only the "all" league, which
+    never goes live). Template helpers that use these are in docs/team-tracker.md.
   domain: automation
   source_url: https://github.com/davidteles/ha-blueprints/blob/main/blueprints/automation/sports/team_tracker_match_memory.yaml
   input:
     team:
-      name: Team Tracker sensor
-      description: The sensor of your team (state PRE / IN / POST / NOT_FOUND).
-      selector: { entity: { domain: sensor, integration: teamtracker } }
+      name: Team Tracker sensors
+      description: >-
+        Your team's sensors, one per competition (state PRE / IN / POST / NOT_FOUND).
+        Don't rely on the "all" league alone: it never goes IN and jumps to the next
+        fixture at kick-off (docs/team-tracker.md).
+      selector: { entity: { domain: sensor, integration: teamtracker, multiple: true } }
     ended_at:
       name: Match ended at
       description: A Date and time helper. Set at the final whistle.
