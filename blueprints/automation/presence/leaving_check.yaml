@@ -37,14 +37,25 @@ blueprint:
       default: ""
       selector: { label: {} }
     skip_climate_devices:
-      name: Skip doors/windows that belong to a thermostat or car
+      name: Skip door/window sensors on a device that has a climate entity
       description: >-
-        Thermostats and radiator valves (tado, Netatmo…) report an "open window"
-        they guessed from a temperature drop, and cars report their own doors and
-        windows. They are not your house, so they are left out when the sensor's
-        device also has a climate entity. Turn off to list them too.
+        The exact rule: a door, window or opening sensor is left out when its
+        device also has a climate.* entity. That catches a thermostat's or
+        radiator valve's guessed "open window" (tado, Netatmo…) and a car's doors
+        when the car has a climate entity. It does NOT catch a car without one
+        (use the ignore label), and it DOES hide a real contact sensor that sits
+        on a device with a thermostat: put those in "Always list these". Turn
+        off to list every sensor.
       default: true
       selector: { boolean: {} }
+    always_list:
+      name: Always list these
+      description: >-
+        Door/window sensors that are listed even if the rule above would skip
+        them, e.g. a real window contact wired into a thermostat or hub that also
+        has a climate entity. "Ignore these" and the ignore label still win.
+      default: []
+      selector: { entity: { domain: binary_sensor, multiple: true } }
     check_lights:
       name: List lights that are on
       default: true
@@ -72,6 +83,7 @@ variables:
     {{ (ignore_input + by_label) | unique | list }}
   check_lights: !input check_lights
   skip_climate_devices: !input skip_climate_devices
+  always_list: !input always_list
   notify_action: !input notify_action
   guest_switch: !input guest_switch
   guest_home: "{{ guest_switch not in ['', none, []] and is_state(guest_switch, 'on') }}"
@@ -81,7 +93,7 @@ variables:
     {% for s in states.binary_sensor | selectattr('attributes.device_class', 'defined')
          | selectattr('attributes.device_class', 'in', ['door', 'window', 'garage_door', 'opening']) %}
     {% set dev = device_id(s.entity_id) %}
-    {% if dev and device_entities(dev) | select('match', 'climate\\.') | list | count > 0 %}{% set ns.e = ns.e + [s.entity_id] %}{% endif %}
+    {% if s.entity_id not in always_list and dev and device_entities(dev) | select('match', 'climate\\.') | list | count > 0 %}{% set ns.e = ns.e + [s.entity_id] %}{% endif %}
     {% endfor %}
     {% endif %}{{ ns.e }}
   openings: >-
