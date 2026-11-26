@@ -36,6 +36,15 @@ blueprint:
         want listed — a car's window sensors, a fridge door, a lamp relay.
       default: ""
       selector: { label: {} }
+    skip_climate_devices:
+      name: Skip doors/windows that belong to a thermostat or car
+      description: >-
+        Thermostats and radiator valves (tado, Netatmo…) report an "open window"
+        they guessed from a temperature drop, and cars report their own doors and
+        windows. They are not your house, so they are left out when the sensor's
+        device also has a climate entity. Turn off to list them too.
+      default: true
+      selector: { boolean: {} }
     check_lights:
       name: List lights that are on
       default: true
@@ -62,13 +71,24 @@ variables:
     {% set by_label = (label_entities(ignore_label) + (label_devices(ignore_label) | map('device_entities') | sum(start=[]))) if ignore_label else [] %}
     {{ (ignore_input + by_label) | unique | list }}
   check_lights: !input check_lights
+  skip_climate_devices: !input skip_climate_devices
   notify_action: !input notify_action
   guest_switch: !input guest_switch
   guest_home: "{{ guest_switch not in ['', none, []] and is_state(guest_switch, 'on') }}"
+  climate_device_sensors: >-
+    {% set ns = namespace(e=[]) %}
+    {% if skip_climate_devices %}
+    {% for s in states.binary_sensor | selectattr('attributes.device_class', 'defined')
+         | selectattr('attributes.device_class', 'in', ['door', 'window', 'garage_door', 'opening']) %}
+    {% set dev = device_id(s.entity_id) %}
+    {% if dev and device_entities(dev) | select('match', 'climate\\.') | list | count > 0 %}{% set ns.e = ns.e + [s.entity_id] %}{% endif %}
+    {% endfor %}
+    {% endif %}{{ ns.e }}
   openings: >-
     {{ states.binary_sensor | selectattr('attributes.device_class', 'defined')
        | selectattr('attributes.device_class', 'in', ['door', 'window', 'garage_door', 'opening'])
        | selectattr('state', 'eq', 'on') | rejectattr('entity_id', 'in', ignore)
+       | rejectattr('entity_id', 'in', climate_device_sensors)
        | map(attribute='name') | list }}
   open_covers: >-
     {{ covers | select('is_state', ['open', 'opening']) | reject('in', ignore)
