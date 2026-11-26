@@ -2,6 +2,17 @@
 
 All notable changes to this project. Versions follow [semantic versioning](https://semver.org/); each entry links to its full release notes on GitHub, which also say how each change was tested.
 
+## [1.18.0] — 2026-11-26
+
+Leaving check: the climate rule stated exactly, plus "Always list these" ([#43](https://github.com/davidteles/ha-blueprints/pull/43)).
+
+- **The option says what it does:** *Skip door/window sensors on a device that has a climate entity*. A car without a climate entity is not skipped (use the ignore label), and a real contact on a device with a thermostat is.
+- **New input "Always list these":** sensors listed even if that rule would skip them. *Ignore these* and the ignore label still win.
+- Defaults are unchanged.
+- Tests: one fixture house covers both directions, the include list, ignore beating it, option off and the `opening` class. A flaky EV load balancer test setup is fixed (test-only).
+
+_Upgrading:_ re-import the leaving check. Nothing changes unless you add sensors to *Always list these*.
+
 ## [1.17.0] — 2026-11-26
 
 Leaving check skips thermostats and cars; vacuum Live Activity keeps one card.
@@ -212,6 +223,7 @@ Live Activities, forgotten phone, backup pause.
 - **Shopping:** buy-again ranking, add without duplicates (script), shopping list by voice.
 - **Small helpers:** pause an appliance while a window is open, alert that clears itself.
 
+[1.18.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.18.0
 [1.17.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.17.0
 [1.16.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.16.0
 [1.15.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.15.0
