@@ -138,7 +138,7 @@ tap_action:
 | **Forgotten phone — ask before arming** | Someone left, another phone still says *home*, but nothing moves → whoever is away is asked *Arm the alarm* / *Someone's home*. Never arms by itself; ignores phone-app reload blips. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Fforgotten_phone_ask_to_arm.yaml) |
 | **Phone almost flat while away** | A phone away from home reports 2 % or less → one quiet heads-up to its owner (a second recipient only if you add one). Re-arms after charging; skips stale, unavailable and charging readings; no location in the message. Best effort: phones don't always report every %. | [![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidteles%2Fha-blueprints%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpresence%2Fphone_battery_critical_away.yaml) |
 
-> **Leaving check tip:** cars and other devices sometimes report "window" sensors; add any you don't care about to *Ignore these*.
+> **Leaving check tip:** door and window sensors that belong to a thermostat (tado, Netatmo valves guess an "open window" from a temperature drop) or to a car are left out on their own, because their device also has a climate entity; turn off *Skip doors/windows that belong to a thermostat or car* to list them. Anything else you don't care about goes in *Ignore these* or gets the ignore label.
 
 ## Comfort
 
