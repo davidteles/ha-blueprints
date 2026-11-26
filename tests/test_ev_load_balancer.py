@@ -109,15 +109,17 @@ class Sim:
         return json.loads(self.hass.states.get(MEMORY).state)
 
 
-async def setup_balancer(hass, load_blueprint, helpers, **extra):
+async def setup_balancer(hass, load_blueprint, helpers, unit="W", **extra):
     await helpers(texts=["balancer"])
     calls = (async_mock_service(hass, "number", "set_value"),
              async_mock_service(hass, "switch", "turn_off"),
              async_mock_service(hass, "switch", "turn_on"))
     hass.states.async_set(STATUS, "Charging")
     hass.states.async_set(CURRENT, str(CAP), {"min": 6, "max": CAP})
-    hass.states.async_set(HOUSE, "0", {"device_class": "power", "unit_of_measurement": "W"})
-    hass.states.async_set(CHARGER, "0", {"device_class": "power", "unit_of_measurement": "W"})
+    # The meters start in the unit the test uses: a "0 W" left over from setup is a valid
+    # reading, and on a slow runner the balancer could act on it before the test starts.
+    hass.states.async_set(HOUSE, "0", {"device_class": "power", "unit_of_measurement": unit})
+    hass.states.async_set(CHARGER, "0", {"device_class": "power", "unit_of_measurement": unit})
     await load_blueprint("car/ev_charger_load_balancer.yaml", {
         "house_power": HOUSE, "charger_power": CHARGER, "limit": LIMIT, "charger_current": CURRENT,
         "status": STATUS, "memory": MEMORY,
@@ -311,9 +313,10 @@ async def test_kilowatt_meters_give_the_same_decisions(hass, balancer, later, un
     assert [c for _, c in sim.commands][:3] == ["set 20", "set 13", "set 20"], sim.commands
 
 
-async def test_an_unknown_power_unit_counts_as_no_reading(hass, balancer, later):
+async def test_an_unknown_power_unit_counts_as_no_reading(hass, load_blueprint, helpers, later):
+    calls = await setup_balancer(hass, load_blueprint, helpers, unit="VA")
     sim = Sim(hass, later, lambda t: 3.0, unit="VA")
-    await sim.run(400, balancer)
+    await sim.run(400, calls)
     assert [c for _, c in sim.commands] == ["set 6"], sim.commands
 
 
