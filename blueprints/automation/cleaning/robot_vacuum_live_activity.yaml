@@ -153,9 +153,13 @@ variables: &live_vars
     {% elif prev in ['cleaning', 'done'] and vac in ['docked', 'idle'] %}done
     {% else %}none{% endif %}
   tag_base: "{{ 'live_' ~ (name | lower | regex_replace('[^a-z0-9]+', '_')) }}"
-  tags:
-    cleaning: "{{ tag_base }}_cleaning"
-    done: "{{ tag_base }}_done"
+  # One card per job: "finished" updates the cleaning card in place. Starting a
+  # second card for the same job could leave a frozen extra card on the lock screen.
+  tag: "{{ tag_base }}"
+  shown: [cleaning, done]
+  # Cards from older versions of this blueprint (one per phase): closed on any
+  # phase change, so an upgrade in the middle of a clean leaves nothing behind.
+  old_tags: ["{{ tag_base }}_cleaning", "{{ tag_base }}_done"]
 
 triggers:
   - trigger: state
@@ -199,7 +203,7 @@ actions:
         value_template: "{{ trigger.id == 'hide' }}"
     then:
       - repeat:
-          for_each: "{{ tags.values() | list }}"
+          for_each: "{{ [tag] + old_tags }}"
           sequence:
             - action: "{{ notify_action }}"
               continue_on_error: true
@@ -207,16 +211,29 @@ actions:
                 message: clear_notification
                 data: { tag: "{{ repeat.item }}" }
       - stop: Card hidden on this phone
-  - alias: Phase changed → close the previous Live Activity
+  - alias: The job is over (finished card timed out, or stuck) → close the card
     if:
       - condition: template
-        value_template: "{{ phase != prev and prev in tags }}"
+        value_template: "{{ phase != prev and prev in shown and phase not in shown }}"
     then:
       - action: "{{ notify_action }}"
         continue_on_error: true
         data:
           message: clear_notification
-          data: { tag: "{{ tags[prev] }}" }
+          data: { tag: "{{ tag }}" }
+  - alias: Phase changed → close any card left by an older version of this blueprint
+    if:
+      - condition: template
+        value_template: "{{ phase != prev and (prev in shown or phase in shown) }}"
+    then:
+      - repeat:
+          for_each: "{{ old_tags }}"
+          sequence:
+            - action: "{{ notify_action }}"
+              continue_on_error: true
+              data:
+                message: clear_notification
+                data: { tag: "{{ repeat.item }}" }
   - alias: Just finished → learn the area (also while the card is hidden)
     if:
       - condition: template
@@ -258,7 +275,7 @@ actions:
                     {%- set p = (problem[:1] | upper ~ problem[1:]) if problem else '' -%}
                     {{ [p, job, ((mins | float(0) | round(0) | int) ~ ' min') if has_area else '', ('🔋 ' ~ batt ~ '%') if batt >= 0 else '', ('~' ~ left ~ ' min left') if left > 0 else ''] | select | join(' · ') or 'Cleaning' }}
                   data:
-                    tag: "{{ tags.cleaning }}"
+                    tag: "{{ tag }}"
                     live_update: true
                     silent: true
                     progress: "{{ area if expected > 0 else 0 }}"
@@ -270,7 +287,7 @@ actions:
                     notification_icon_color: "{{ '#F44336' if vac == 'error' else '#9C27B0' }}"
                     progress_bar_color: "#9C27B0"
                     url: "{{ url }}"
-          - alias: Just finished → show "finished"
+          - alias: Just finished → the same card turns into "finished"
             conditions:
               - condition: template
                 value_template: "{{ phase == 'done' and prev != 'done' }}"
@@ -281,11 +298,13 @@ actions:
                   message: >-
                     {{ (job ~ ' · ') if job else '' }}{{ (area ~ ' m² in ') if has_area else '' }}{{ mins | float(0) | round(0) | int }} min{{ (' · 🔋 ' ~ batt ~ '%') if batt >= 0 else '' }}
                   data:
-                    tag: "{{ tags.done }}"
+                    tag: "{{ tag }}"
                     live_update: true
                     silent: true
                     progress: 1
                     progress_max: 1
+                    chronometer: false
+                    when: 0
                     critical_text: Done
                     notification_icon: mdi:robot-vacuum
                     notification_icon_color: "#4CAF50"
@@ -320,9 +339,11 @@ actions:
         data: { value: "{{ phase }}" }
   - alias: >-
       A new card was just started: give the phone 15 s to register it before the
-      next update, or iOS starts a second card for the same tag
+      next update, or iOS starts a second card for the same tag. Not when an
+      existing card only changes (cleaning → finished, or a new clean while
+      "finished" is still showing).
     if:
       - condition: template
-        value_template: "{{ phase != prev and phase in tags }}"
+        value_template: "{{ phase == 'cleaning' and prev not in shown and not hidden }}"
     then:
       - delay: { seconds: 15 }
