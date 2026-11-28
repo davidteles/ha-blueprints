@@ -199,3 +199,91 @@ async def test_script_move_does_nothing_while_still_waiting(hass, hung_script):
     await hass.services.async_call("script", "laundry_hung", {"place": "Outside", "step": "move"}, blocking=True)
     await hass.async_block_till_done()
     assert hass.states.get(PLACE).state == "Not set" and hass.states.get(WAITING).state == "on"
+
+
+# ---------------------------------------------------------------- humidity and fog (v1.19.0)
+
+HUMIDITY = "sensor.outdoor_humidity"
+
+
+@pytest.fixture
+async def damp(hass: HomeAssistant, load_blueprint, helpers, freezer):
+    """Advice with the humidity check, at 10:00 Lisbon time so 'until 17:00' is fixed."""
+    await hass.config.async_set_time_zone("Europe/Lisbon")
+    freezer.move_to("2026-11-28 10:00:00+00:00")
+    await helpers(texts=["drying_advice"])
+    hass.states.async_set(MET, "cloudy")
+    hass.states.async_set(LOCAL, "cloudy")
+    hass.states.async_set(GAUGE, "0")
+    hass.states.async_set(HUMIDITY, "70", {"device_class": "humidity", "unit_of_measurement": "%"})
+    data = {MET: [], LOCAL: [], "inputs": {}}
+
+    async def _handler(call):
+        ids = call.data.get("entity_id") or []
+        return {e: {"forecast": data.get(e, [])} for e in ids}
+
+    hass.services.async_register("weather", "get_forecasts", _handler, supports_response=SupportsResponse.ONLY)
+
+    async def _load(**extra):
+        await load_blueprint("laundry/drying_advice.yaml", {
+            "advice": ADVICE, "forecasts": [MET, LOCAL], "rain_now": GAUGE, "outdoor_humidity": HUMIDITY, **extra})
+    data["load"] = _load
+    return data
+
+
+def _met(rows):
+    """met.no-like hours from 10:00: (condition, humidity, rain mm)."""
+    return _hours(0, [{"condition": c, "humidity": rh, "precipitation": mm} for c, rh, mm in rows])
+
+
+# 28 Nov 2026, 10:00-17:00: fog until 12:00, then drying slowly (avg 86 % until 17:00)
+FOGGY_DAY = [("fog", 98, 0), ("fog", 96, 0), ("cloudy", 89, 0), ("partlycloudy", 84, 0),
+             ("partlycloudy", 80, 0), ("partlycloudy", 77, 0), ("cloudy", 78, 0), ("cloudy", 88, 0)]
+
+
+async def test_fog_now_is_indoors_with_when_it_gets_drier(hass, damp):
+    await damp["load"]()
+    hass.states.async_set(MET, "fog")
+    hass.states.async_set(HUMIDITY, "98", {"device_class": "humidity", "unit_of_measurement": "%"})
+    damp[MET] = _met(FOGGY_DAY)
+    a = await _refresh(hass)
+    assert a[0] == "indoors" and a[2] == "humidity", a
+    assert a[1] == "Fog · 98% humidity: it won't dry outside · drier from 12:00", a[1]
+
+
+async def test_humid_sensor_without_fog_is_indoors(hass, damp):
+    await damp["load"]()
+    hass.states.async_set(HUMIDITY, "93", {"device_class": "humidity", "unit_of_measurement": "%"})
+    damp[MET] = _met([("cloudy", 70, 0)] * 8)
+    a = await _refresh(hass)
+    assert a[0] == "indoors" and a[1].startswith("93% humidity outside: it won't dry"), a
+
+
+async def test_humid_afternoon_forecast_is_indoors(hass, damp):
+    await damp["load"]()
+    damp[MET] = _met([("cloudy", rh, 0) for rh in (88, 87, 87, 86, 86, 87, 88, 90)])
+    a = await _refresh(hass)
+    assert a[0] == "indoors" and a[1] == "Humid until 17:00 (avg 87%): it won't dry outside", a
+
+
+async def test_dry_afternoon_after_a_humid_hour_is_outdoors(hass, damp):
+    await damp["load"]()
+    damp[MET] = _met([("cloudy", 88, 0)] + [("sunny", 65, 0)] * 7)
+    a = await _refresh(hass)
+    assert a[0] == "outdoors", a
+
+
+async def test_humidity_check_off_keeps_the_rain_only_advice(hass, damp):
+    await damp["load"](check_humidity=False)
+    hass.states.async_set(MET, "fog")
+    damp[MET] = _met(FOGGY_DAY)
+    a = await _refresh(hass)
+    assert a[0] == "outdoors" and a[1] == "No rain forecast in the next 3 h", a
+
+
+async def test_rain_still_comes_before_humidity(hass, damp):
+    await damp["load"]()
+    hass.states.async_set(MET, "fog")
+    damp[MET] = _met([("fog", 98, 0), ("rainy", 95, 0.6)] + [("cloudy", 90, 0)] * 6)
+    a = await _refresh(hass)
+    assert a[0] == "indoors" and a[1] == "Rain likely around 11:00", a

@@ -12,7 +12,8 @@ blueprint:
 
     - **outdoors** — "No rain forecast in the next 3 h"
 
-    - **indoors** — "Rain likely around 15:00", or "Rain detected nearby now"
+    - **indoors** — "Rain likely around 15:00", "Rain detected nearby now",
+    or "Fog · 98% humidity: it won't dry outside · drier from 12:00"
 
     - **unknown** — "No reliable recommendation · forecast unavailable"
 
@@ -21,6 +22,15 @@ blueprint:
     a rain chance or a rain amount. Without enough covered hours, the advice
     is *unknown*, not *outdoors*. A rain gauge reading above zero always means
     indoors. Forecast times are approximate.
+
+
+    **No rain is not enough to dry.** With *Check humidity* on (the default),
+    it also says indoors when a forecast entity reports fog now, your outdoor
+    humidity sensor reads 90 % or more, or the forecast humidity from now until
+    the end of the drying day (17:00, at least the look-ahead) averages 85 % or
+    more. Laundry stays out for hours, so the whole afternoon counts. When the
+    rest of the day gets drier, the reason adds "drier from HH:MM". Rain still
+    comes first.
 
 
     It refreshes when the laundry starts waiting, every 30 minutes while it
@@ -70,6 +80,30 @@ blueprint:
       name: Hours of forecast needed for "outdoors"
       default: 3
       selector: { number: { min: 1, max: 12 } }
+    check_humidity:
+      name: Check humidity and fog
+      description: Indoors when it is foggy, too humid now, or too humid on average until the end of the drying day.
+      default: true
+      selector: { boolean: {} }
+    outdoor_humidity:
+      name: Outdoor humidity sensor (optional)
+      description: Your own outdoor humidity sensor (%). Without it, only fog and the forecast humidity count.
+      default: []
+      selector: { entity: { domain: sensor, device_class: humidity } }
+    damp_now:
+      name: Too humid now at
+      default: 90
+      selector: { number: { min: 70, max: 100, unit_of_measurement: "%" } }
+    damp_average:
+      name: Too humid on average at
+      description: Average forecast humidity from now until the end of the drying day.
+      default: 85
+      selector: { number: { min: 60, max: 100, unit_of_measurement: "%" } }
+    drying_day_ends:
+      name: Drying day ends at
+      description: Laundry that is still out after this is not counted. The humidity average covers at least the look-ahead.
+      default: "17:00:00"
+      selector: { time: {} }
 
 mode: restart
 
@@ -84,6 +118,11 @@ variables:
   wet_probability: !input wet_probability
   wet_amount: !input wet_amount
   min_hours: !input min_hours
+  check_humidity: !input check_humidity
+  outdoor_humidity: !input outdoor_humidity
+  damp_now: !input damp_now
+  damp_average: !input damp_average
+  drying_day_ends: !input drying_day_ends
 
 triggers:
   - trigger: state
@@ -111,7 +150,9 @@ actions:
       result: >-
         {%- set end = now() + timedelta(hours=window | int) -%}
         {%- set rainy = ['rainy', 'pouring', 'lightning-rainy', 'snowy-rainy', 'hail', 'snowy'] -%}
-        {%- set ns = namespace(best=0, risk=none) -%}
+        {%- set ns = namespace(best=0, risk=none, rows=[], drier=none) -%}
+        {%- set dry_end = today_at(drying_day_ends) -%}
+        {%- set dw_end = [end, dry_end] | max -%}
         {%- for w in forecasts -%}
           {%- set cov = namespace(n=0) -%}
           {%- for f in ((fc[w].forecast if fc is defined and fc and w in fc else []) or []) -%}
@@ -128,16 +169,32 @@ actions:
                 {%- set ns.risk = t -%}
               {%- endif -%}
             {%- endif -%}
+            {%- if t < dw_end and t + timedelta(hours=1) > now() and f.humidity is number -%}
+              {%- set ns.rows = ns.rows + [[t, f.humidity, f.condition == 'fog' or f.condition in rainy or (f.precipitation | default(0) | float(0)) >= wet_amount | float]] -%}
+            {%- endif -%}
           {%- endfor -%}
           {%- set ns.best = [ns.best, cov.n] | max -%}
         {%- endfor -%}
         {%- set gauge = states(rain_now) if rain_now not in ['', none, []] else 'unavailable' -%}
         {%- set raining = (rain_now.startswith('binary_sensor.') and gauge == 'on') or (gauge | is_number and gauge | float > 0) -%}
         {%- set recent = rain_last_hour not in ['', none, []] and states(rain_last_hour) | float(0) >= 0.2 -%}
+        {%- set rh_now = states(outdoor_humidity) | float(-1) if outdoor_humidity not in ['', none, []] else -1 -%}
+        {%- set fog_now = forecasts | select('is_state', 'fog') | list | count > 0 -%}
+        {%- set rh_avg = ((ns.rows | map(attribute=1) | sum) / (ns.rows | count)) | round(0) | int if ns.rows else -1 -%}
+        {%- set damp = check_humidity and (fog_now or rh_now >= damp_now | float or rh_avg >= damp_average | float) -%}
+        {%- for r in ns.rows | sort(attribute=0) if ns.drier is none and r[0] > now() + timedelta(minutes=30) and r[0] < dry_end -%}
+          {%- set rest = ns.rows | selectattr(0, '>=', r[0]) | list -%}
+          {%- if rest | map(attribute=0) | unique | list | count >= 2 and (rest | map(attribute=1) | sum) / (rest | count) < damp_average | float and not (rest | map(attribute=2) | select | list) -%}{%- set ns.drier = r[0] -%}{%- endif -%}
+        {%- endfor -%}
+        {%- set later = (' · drier from ' ~ ns.drier.strftime('%H:%M')) if ns.drier is not none else '' -%}
         {%- if raining or recent -%}
           {%- set out = ['indoors', 'Rain detected nearby now' if raining else 'It rained nearby in the last hour', 'local_hazard', ''] -%}
         {%- elif ns.risk is not none -%}
           {%- set out = ['indoors', 'Rain likely now' if ns.risk <= now() else 'Rain likely around ' ~ ns.risk.strftime('%H:%M'), 'forecast', ns.risk.strftime('%H:%M')] -%}
+        {%- elif damp -%}
+          {%- set rhs = (rh_now | round(0) | int | string ~ '% humidity') if rh_now >= 0 else (('forecast ' ~ rh_avg ~ '% humidity') if rh_avg >= 0 else 'high humidity') -%}
+          {%- set why = ('Fog · ' ~ rhs ~ ': it won\'t dry outside') if fog_now else ((rhs ~ ' outside: it won\'t dry') if rh_now >= damp_now | float else ('Humid until ' ~ dw_end.strftime('%H:%M') ~ ' (avg ' ~ rh_avg ~ '%): it won\'t dry outside')) -%}
+          {%- set out = ['indoors', why ~ later, 'humidity', ''] -%}
         {%- elif ns.best >= min_hours | int -%}
           {%- set out = ['outdoors', 'No rain forecast in the next ' ~ window | int ~ ' h', 'forecast_and_local' if gauge not in ['unavailable', 'unknown'] else 'forecast_only', ''] -%}
         {%- else -%}

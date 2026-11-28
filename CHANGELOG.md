@@ -2,6 +2,17 @@
 
 All notable changes to this project. Versions follow [semantic versioning](https://semver.org/); each entry links to its full release notes on GitHub, which also say how each change was tested.
 
+## [1.19.0] — 2026-11-28
+
+Laundry drying advice: no rain is not enough to dry ([#45](https://github.com/davidteles/ha-blueprints/pull/45)).
+
+- **Humidity and fog count:** with *Check humidity and fog* on (the default), the advice is indoors when a forecast entity reports fog now, your outdoor humidity sensor reads 90 % or more, or the forecast humidity from now until the end of the drying day (17:00, at least the look-ahead) averages 85 % or more.
+- **"Drier from HH:MM":** added to the reason when the rest of the day from that hour gets dry enough.
+- **New optional inputs:** outdoor humidity sensor, the two thresholds and the end of the drying day. Rain still comes first.
+- Tests: 6 new scenarios, including a real foggy morning (98 %, fog until 12:00).
+
+_Upgrading:_ re-import the drying advice. On humid or foggy days it now says indoors where it used to say outdoors; turn *Check humidity and fog* off for the old rain-only advice.
+
 ## [1.18.0] — 2026-11-26
 
 Leaving check: the climate rule stated exactly, plus "Always list these" ([#43](https://github.com/davidteles/ha-blueprints/pull/43)).
@@ -223,6 +234,7 @@ Live Activities, forgotten phone, backup pause.
 - **Shopping:** buy-again ranking, add without duplicates (script), shopping list by voice.
 - **Small helpers:** pause an appliance while a window is open, alert that clears itself.
 
+[1.19.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.19.0
 [1.18.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.18.0
 [1.17.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.17.0
 [1.16.0]: https://github.com/davidteles/ha-blueprints/releases/tag/v1.16.0
